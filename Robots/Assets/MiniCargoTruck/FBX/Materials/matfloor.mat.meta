@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 01daadd1b359eb546bf395b17223309e
+timeCreated: 1437214670
+licenseType: Store
+NativeFormatImporter:
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 68663
+  packageName: Mini Cargo Truck
+  packageVersion: 1.0
+  assetPath: Assets/MiniCargoTruck/FBX/Materials/matfloor.mat
+  uploadId: 789146

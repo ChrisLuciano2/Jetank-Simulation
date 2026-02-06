@@ -1,0 +1,2 @@
+# No external dependencies required
+# unity_client.py uses only Python standard library (socket, json, threading)

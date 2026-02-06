@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 1be48fed439dd4e43b1a727293279c12
+timeCreated: 1464069658
+licenseType: Store
+DefaultImporter:
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 68663
+  packageName: Mini Cargo Truck
+  packageVersion: 1.0
+  assetPath: Assets/MiniCargoTruck/Scene/IndustrialTruck.unity
+  uploadId: 789146

@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: e332e4734b50b4c688341b6e6bd1c849
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 112000000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 68663
+  packageName: Mini Cargo Truck
+  packageVersion: 1.0
+  assetPath: Assets/MiniCargoTruck/Scene/IndustrialTruck/LightingData.asset
+  uploadId: 789146
