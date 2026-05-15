@@ -157,7 +157,7 @@ namespace RobotSimulator.Communication
         /// <summary>
         /// Send a message to the connected Python client.
         /// </summary>
-        public void SendMessage(string json)
+        public new void SendMessage(string json)
         {
             if (_clientStream != null && _clientStream.CanWrite)
             {

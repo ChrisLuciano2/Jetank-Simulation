@@ -124,28 +124,61 @@ public class RoboticArmController : MonoBehaviour
 
     // ─── PUBLIC API ──────────────────────────
 
-    /// <summary>Set all 6 joint angles at once (degrees).</summary>
+    /// <summary>Set all 6 joint angles at once (degrees) with safety clamping.</summary>
     public void SetJointAngles(float j1, float j2, float j3, float j4, float j5, float j6)
     {
-        J1_BaseYaw = Mathf.Clamp(j1, -180f, 180f);
-        J2_ShoulderPitch = Mathf.Clamp(j2, -90f, 90f);
-        J3_ElbowPitch = Mathf.Clamp(j3, -135f, 135f);
-        J4_WristRoll = Mathf.Clamp(j4, -180f, 180f);
-        J5_WristPitch = Mathf.Clamp(j5, -120f, 120f);
-        J6_ToolRoll = Mathf.Clamp(j6, -180f, 180f);
+        SetJoint(0, j1);
+        SetJoint(1, j2);
+        SetJoint(2, j3);
+        SetJoint(3, j4);
+        SetJoint(4, j5);
+        SetJoint(5, j6);
     }
 
-    /// <summary>Set individual joint by index (0-5).</summary>
+    // Hard limits — the arm will not move past these under any circumstances.
+    // J2 floor -20°: below this the upper arm approaches chassis level.
+    // J1 ±160°: beyond this cables begin wrapping through the base joint.
+    public static readonly float[] JOINT_MIN  = { -160f, -20f, -130f, -180f, -100f, -180f };
+    public static readonly float[] JOINT_MAX  = {  160f,  85f,  130f,  180f,  100f,  180f };
+
+    // Warning zone — logged when angle enters this band before the hard limit.
+    // Gives ~10° of notice so students can see the approach in the Console.
+    public static readonly float[] WARN_MIN   = { -140f, -10f, -115f, -165f,  -85f, -165f };
+    public static readonly float[] WARN_MAX   = {  140f,  75f,  115f,  165f,   85f,  165f };
+
+    /// <summary>Set individual joint by index (0-5) with safety clamping.</summary>
     public void SetJoint(int index, float angleDegrees)
     {
+        if (index < 0 || index > 5) return;
+
+        float clamped = Mathf.Clamp(angleDegrees, JOINT_MIN[index], JOINT_MAX[index]);
+
+        // Hard-limit hit
+        if (!Mathf.Approximately(clamped, angleDegrees))
+        {
+            string msg = $"Joint {index} HARD LIMIT: {angleDegrees:F1}° clamped to {clamped:F1}° " +
+                         $"(limit [{JOINT_MIN[index]}, {JOINT_MAX[index]}])";
+            Debug.LogError($"[RoboticArm] 🛑 {msg}");
+            SafetyMonitor.QueueWarning(msg);
+        }
+        // Warning zone (approaching limit)
+        else if (clamped < WARN_MIN[index] || clamped > WARN_MAX[index])
+        {
+            string msg = $"Joint {index} APPROACHING LIMIT: {clamped:F1}° " +
+                         $"(warn zone [{WARN_MIN[index]}, {WARN_MAX[index]}], " +
+                         $"hard limit [{JOINT_MIN[index]}, {JOINT_MAX[index]}])";
+            Debug.LogWarning($"[RoboticArm] ⚠ {msg}");
+            SafetyMonitor.QueueWarning(msg);
+        }
+
         switch (index)
         {
-            case 0: J1_BaseYaw = angleDegrees; break;
-            case 1: J2_ShoulderPitch = angleDegrees; break;
-            case 2: J3_ElbowPitch = angleDegrees; break;
-            case 3: J4_WristRoll = angleDegrees; break;
-            case 4: J5_WristPitch = angleDegrees; break;
-            case 5: J6_ToolRoll = angleDegrees; break;
+            case 0: J1_BaseYaw       = clamped; break;
+            case 1: J2_ShoulderPitch = clamped; break;
+            case 2: J3_ElbowPitch    = clamped; break;
+            case 3: J4_WristRoll     = clamped; break;
+            case 4: J5_WristPitch    = clamped; break;
+            case 5: J6_ToolRoll      = clamped; break;
         }
     }
 

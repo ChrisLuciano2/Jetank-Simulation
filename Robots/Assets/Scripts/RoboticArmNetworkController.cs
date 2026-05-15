@@ -130,6 +130,27 @@ public class RoboticArmNetworkController : MonoBehaviour
                     Debug.Log($"[{robotId}] End effector position: {endPos}");
                     break;
 
+                // ── TTLServo shim commands ────────────────────────────────────
+                case "servo_angle":
+                    // {"command":"servo_angle","servo_id":N,"angle":deg,"direction":d}
+                    ApplyServoAngle(cmd.servo_id, cmd.angle);
+                    break;
+
+                case "servo_sync":
+                    // {"command":"servo_sync","sync_ids":[...],"sync_angles":[...]}
+                    if (cmd.sync_ids != null && cmd.sync_angles != null)
+                    {
+                        int count = Mathf.Min(cmd.sync_ids.Length, cmd.sync_angles.Length);
+                        for (int i = 0; i < count; i++)
+                            ApplyServoAngle(cmd.sync_ids[i], cmd.sync_angles[i]);
+                    }
+                    break;
+
+                case "servo_stop":
+                    // Stop servo — in simulation just leave joint at current angle
+                    Debug.Log($"[{robotId}] servo_stop servo_id={cmd.servo_id} (no-op in sim)");
+                    break;
+
                 default:
                     // Not an arm command, ignore silently
                     break;
@@ -138,6 +159,29 @@ public class RoboticArmNetworkController : MonoBehaviour
         catch (System.Exception e)
         {
             Debug.LogError($"[{robotId}] Failed to parse arm command: {e.Message}");
+        }
+    }
+
+    // ── TTLServo → arm joint mapping ─────────────────────────────────────────
+    // Servo IDs from the real JETANK hardware:
+    //   1 → joint 0 (base yaw)   2 → joint 1 (shoulder)  3 → joint 2 (elbow)
+    //   4 → gripper              5 → joint 4 (wrist tilt)
+    private void ApplyServoAngle(int servoId, float angleDeg)
+    {
+        switch (servoId)
+        {
+            case 1: _armController.SetJoint(0, angleDeg); break;
+            case 2: _armController.SetJoint(1, angleDeg); break;
+            case 3: _armController.SetJoint(2, angleDeg); break;
+            case 4:
+                // Gripper: hardware range [-100°, +100°] → sim [0=closed, 1=open]
+                float grip = Mathf.Clamp01((angleDeg + 100f) / 200f);
+                _armController.SetGripper(grip);
+                break;
+            case 5: _armController.SetJoint(4, angleDeg); break;
+            default:
+                Debug.LogWarning($"[{robotId}] Unknown servo_id: {servoId}");
+                break;
         }
     }
 
@@ -152,5 +196,10 @@ public class RoboticArmNetworkController : MonoBehaviour
         public float[] joints;
         public float gripper_amount;
         public string pose_name;
+        // TTLServo shim fields
+        public int servo_id;
+        public int direction;
+        public int[] sync_ids;
+        public float[] sync_angles;
     }
 }
