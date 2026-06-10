@@ -73,7 +73,7 @@ class _VideoSource:
         self._open   = True
         self._width  = 640
         self._height = 480
-        print(f"[jetson_utils] videoSource opened: {uri} (→ Unity SimQueryServer)")
+        print(f"[jetson_utils] videoSource opened: {uri} (-> Unity SimQueryServer)")
 
     def Capture(self, timeout=1000):
         """
@@ -131,10 +131,10 @@ class _VideoOutput:
             path = uri[len("file://"):]
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             self._writer = cv2.VideoWriter(path, fourcc, 30, (640, 480))
-            print(f"[jetson_utils] videoOutput → file: {path}")
+            print(f"[jetson_utils] videoOutput -> file: {path}")
         else:
             self._window = "JetBot Simulation"
-            print(f"[jetson_utils] videoOutput → display window")
+            print(f"[jetson_utils] videoOutput -> display window")
 
     def IsStreaming(self) -> bool:
         if self._window:

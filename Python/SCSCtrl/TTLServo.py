@@ -205,8 +205,8 @@ def _safe_angle(servo_id: int, angle_deg: float) -> float:
     if abs(clamped - angle_deg) > 0.01:
         # Hard limit hit — clamped
         print(f"\n{_BORDER}")
-        print(f"  [TTLServo] 🛑 HARD LIMIT: servo {servo_id} angle {angle_deg:.1f}°")
-        print(f"  Clamped to {clamped:.1f}° (hard limit [{lo}, {hi}])")
+        print(f"  [TTLServo] HARD LIMIT: servo {servo_id} angle {angle_deg:.1f} deg")
+        print(f"  Clamped to {clamped:.1f} deg (hard limit [{lo}, {hi}])")
         print(f"  Motion stopped — fix your angle before deploying to real robot!")
         print(f"{_BORDER}\n")
     elif (servo_id in _ANGLE_WARN_MIN and
@@ -215,7 +215,7 @@ def _safe_angle(servo_id: int, angle_deg: float) -> float:
         wlo = _ANGLE_WARN_MIN[servo_id]
         whi = _ANGLE_WARN_MAX[servo_id]
         print(f"\n{_BORDER}")
-        print(f"  [TTLServo] ⚠ WARNING: servo {servo_id} at {angle_deg:.1f}°")
+        print(f"  [TTLServo] WARNING: servo {servo_id} at {angle_deg:.1f} deg")
         print(f"  Approaching hard limit [{lo}, {hi}] — warn zone [{wlo}, {whi}]")
         print(f"{_BORDER}\n")
 

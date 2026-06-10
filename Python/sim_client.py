@@ -48,7 +48,7 @@ class _SimClient:
                 self._ctrl_sock.settimeout(CONNECT_TIMEOUT)
                 self._ctrl_sock.connect((host, ctrl_port))
                 self._ctrl_sock.settimeout(RECV_TIMEOUT)
-                print(f"[sim_client] Control channel connected → {host}:{ctrl_port}")
+                print(f"[sim_client] Control channel connected -> {host}:{ctrl_port}")
             except Exception as e:
                 print(f"[sim_client] Could not connect control channel: {e}")
                 self._ctrl_sock = None
@@ -58,7 +58,7 @@ class _SimClient:
                 self._qry_sock.settimeout(CONNECT_TIMEOUT)
                 self._qry_sock.connect((host, qry_port))
                 self._qry_sock.settimeout(RECV_TIMEOUT)
-                print(f"[sim_client] Query channel connected    → {host}:{qry_port}")
+                print(f"[sim_client] Query channel connected    -> {host}:{qry_port}")
             except Exception as e:
                 print(f"[sim_client] Could not connect query channel: {e}")
                 self._qry_sock = None

@@ -92,27 +92,27 @@ def test_servos():
     header("Servos")
     from SCSCtrl import TTLServo
 
-    print("Servo 1 (base yaw) → 30°")
+    print("Servo 1 (base yaw) -> 30 deg")
     TTLServo.servoAngleCtrl(1, 30, 1, 500)
     time.sleep(0.8)
 
-    print("Servo 2 (shoulder) → 20°")
+    print("Servo 2 (shoulder) -> 20 deg")
     TTLServo.servoAngleCtrl(2, 20, 1, 500)
     time.sleep(0.8)
 
-    print("Servo 3 (elbow) → 15°")
+    print("Servo 3 (elbow) -> 15 deg")
     TTLServo.servoAngleCtrl(3, 15, 1, 500)
     time.sleep(0.8)
 
-    print("Servo 4 (gripper) → open (90°)")
+    print("Servo 4 (gripper) -> open (90 deg)")
     TTLServo.servoAngleCtrl(4, 90, 1, 300)
     time.sleep(0.5)
 
-    print("Servo 4 (gripper) → close (-90°)")
+    print("Servo 4 (gripper) -> close (-90 deg)")
     TTLServo.servoAngleCtrl(4, -90, 1, 300)
     time.sleep(0.5)
 
-    print("Servo 5 (wrist) → 10°")
+    print("Servo 5 (wrist) -> 10 deg")
     TTLServo.servoAngleCtrl(5, 10, 1, 500)
     time.sleep(0.8)
 
