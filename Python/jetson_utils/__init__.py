@@ -16,7 +16,7 @@ The returned "CUDA images" are CudaImageSim objects that wrap numpy arrays.
 All attributes and methods match the real jetson_utils interface so student
 code runs without changes.
 """
-
+from __future__ import annotations
 import base64
 import time
 import numpy as np
