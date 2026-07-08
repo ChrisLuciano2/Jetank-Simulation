@@ -145,6 +145,9 @@ namespace RobotSimulator.Communication
                     case "get_safety_warnings":
                         return HandleGetSafetyWarnings();
 
+                    case "get_proximity":
+                        return HandleGetProximity();
+
                     default:
                         return $"{{\"status\":\"error\",\"message\":\"unknown query: {q.command}\"}}";
                 }
@@ -195,6 +198,25 @@ namespace RobotSimulator.Communication
                 return "{\"status\":\"ok\",\"objects\":[]}";
 
             return SimCamera.Instance.GetCachedDetectionsJson();
+        }
+
+        // ── Proximity query ───────────────────────────────────────────────────
+
+
+        private string HandleGetProximity()
+        {
+            if (ProximitySensor.Instance == null)
+                return "{\"status\":\"error\",\"message\":\"ProximitySensor not found\"}";
+
+            var (left, center, right) = ProximitySensor.Instance.GetCachedDistances();
+            var ic = System.Globalization.CultureInfo.InvariantCulture;
+
+            string result =
+                 $"{{\"status\":\"ok\",\"left\":{left.ToString("F2", ic)},\"center\":{center.ToString("F2", ic)},\"right\":{right.ToString("F2", ic)}}}";
+
+            
+
+            return result;
         }
 
         // ── Lifecycle ─────────────────────────────────────────────────────────
