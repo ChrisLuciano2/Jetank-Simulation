@@ -340,8 +340,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ab2dc359cc040da4581ae42af2f19339, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ProximitySensor
-  maxRange: 8
-  sideAngleDegrees: 30
+  maxRange: 12
+  scanFovDegrees: 120
+  rayCount: 13
   rayOriginOffset: {x: 0, y: 0.2, z: 0}
   hitLayers:
     serializedVersion: 2

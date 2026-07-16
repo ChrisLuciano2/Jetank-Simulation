@@ -3,12 +3,12 @@
   "WorkspaceRootPath": "D:\\GithubRepos\\Jetank-Simulation\\Robots\\",
   "Documents": [
     {
-      "AbsoluteMoniker": "D:0:0:{3E2E4C52-99E2-30DA-0A8A-25DA629A7FC2}|Assembly-CSharp.csproj|d:\\githubrepos\\jetank-simulation\\robots\\assets\\scripts\\communication\\simqueryserver.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{3E2E4C52-99E2-30DA-0A8A-25DA629A7FC2}|Assembly-CSharp.csproj|solutionrelative:assets\\scripts\\communication\\simqueryserver.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
       "AbsoluteMoniker": "D:0:0:{3E2E4C52-99E2-30DA-0A8A-25DA629A7FC2}|Assembly-CSharp.csproj|D:\\GithubRepos\\Jetank-Simulation\\Robots\\assets\\scripts\\proximitysensor.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{3E2E4C52-99E2-30DA-0A8A-25DA629A7FC2}|Assembly-CSharp.csproj|solutionrelative:assets\\scripts\\proximitysensor.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{3E2E4C52-99E2-30DA-0A8A-25DA629A7FC2}|Assembly-CSharp.csproj|d:\\githubrepos\\jetank-simulation\\robots\\assets\\scripts\\communication\\simqueryserver.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{3E2E4C52-99E2-30DA-0A8A-25DA629A7FC2}|Assembly-CSharp.csproj|solutionrelative:assets\\scripts\\communication\\simqueryserver.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     }
   ],
   "DocumentGroupContainers": [
@@ -18,11 +18,11 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 0,
+          "SelectedChildIndex": 1,
           "Children": [
             {
               "$type": "Document",
-              "DocumentIndex": 0,
+              "DocumentIndex": 1,
               "Title": "SimQueryServer.cs",
               "DocumentMoniker": "D:\\GithubRepos\\Jetank-Simulation\\Robots\\Assets\\Scripts\\Communication\\SimQueryServer.cs",
               "RelativeDocumentMoniker": "Assets\\Scripts\\Communication\\SimQueryServer.cs",
@@ -35,13 +35,13 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 1,
+              "DocumentIndex": 0,
               "Title": "ProximitySensor.cs",
               "DocumentMoniker": "D:\\GithubRepos\\Jetank-Simulation\\Robots\\Assets\\Scripts\\ProximitySensor.cs",
               "RelativeDocumentMoniker": "Assets\\Scripts\\ProximitySensor.cs",
               "ToolTip": "D:\\GithubRepos\\Jetank-Simulation\\Robots\\Assets\\Scripts\\ProximitySensor.cs",
               "RelativeToolTip": "Assets\\Scripts\\ProximitySensor.cs",
-              "ViewState": "AgIAADAAAAAAAAAAAAA1wE0AAAABAAAAAAAAAA==",
+              "ViewState": "AgIAABgAAAAAAAAAAAAAABsAAABJAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
               "WhenOpened": "2026-07-07T21:19:33.702Z",
               "EditorCaption": ""

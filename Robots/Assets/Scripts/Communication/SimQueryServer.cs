@@ -26,8 +26,8 @@ namespace RobotSimulator.Communication
         [SerializeField] private int queryPort = 5556;
         [SerializeField] private bool autoStart = true;
 
-        private TcpListener  _listener;
-        private Thread       _listenerThread;
+        private TcpListener _listener;
+        private Thread _listenerThread;
         private volatile bool _isRunning;
 
         public static SimQueryServer Instance { get; private set; }
@@ -97,7 +97,7 @@ namespace RobotSimulator.Communication
                         while ((nl = accumulated.IndexOf('\n')) >= 0)
                         {
                             string line = accumulated.Substring(0, nl).Trim();
-                            accumulated  = accumulated.Substring(nl + 1);
+                            accumulated = accumulated.Substring(nl + 1);
                             if (line.Length == 0) continue;
 
                             string response = ProcessQuery(line);
@@ -147,6 +147,9 @@ namespace RobotSimulator.Communication
 
                     case "get_proximity":
                         return HandleGetProximity();
+
+                    case "get_proximity_scan":
+                        return HandleGetProximityScan();
 
                     default:
                         return $"{{\"status\":\"error\",\"message\":\"unknown query: {q.command}\"}}";
@@ -211,17 +214,49 @@ namespace RobotSimulator.Communication
             var (left, center, right) = ProximitySensor.Instance.GetCachedDistances();
             var ic = System.Globalization.CultureInfo.InvariantCulture;
 
-            string result =
-                 $"{{\"status\":\"ok\",\"left\":{left.ToString("F2", ic)},\"center\":{center.ToString("F2", ic)},\"right\":{right.ToString("F2", ic)}}}";
+            // max_range lets Python auto-calibrate its slow-down band to the
+            // sensor's actual reach (a mismatch here once made "completely
+            // clear" indistinguishable from "obstacle at max range").
+            float maxRange = ProximitySensor.Instance.MaxRange;
 
-            
+            string result =
+                 $"{{\"status\":\"ok\",\"left\":{left.ToString("F2", ic)},\"center\":{center.ToString("F2", ic)},\"right\":{right.ToString("F2", ic)},\"max_range\":{maxRange.ToString("F2", ic)}}}";
+
+
 
             return result;
         }
 
+        private string HandleGetProximityScan()
+        {
+            if (ProximitySensor.Instance == null)
+                return "{\"status\":\"error\",\"message\":\"ProximitySensor not found\"}";
+
+            float[] scan = ProximitySensor.Instance.GetCachedScan();
+            float fov = ProximitySensor.Instance.ScanFovDegrees;
+            float maxRange = ProximitySensor.Instance.MaxRange;
+            var ic = System.Globalization.CultureInfo.InvariantCulture;
+
+            var sb = new System.Text.StringBuilder();
+            sb.Append("{\"status\":\"ok\",\"fov\":");
+            sb.Append(fov.ToString("F1", ic));
+            sb.Append(",\"count\":");
+            sb.Append(scan.Length);
+            sb.Append(",\"max_range\":");
+            sb.Append(maxRange.ToString("F2", ic));
+            sb.Append(",\"distances\":[");
+            for (int i = 0; i < scan.Length; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append(scan[i].ToString("F2", ic));
+            }
+            sb.Append("]}");
+            return sb.ToString();
+        }
+
         // ── Lifecycle ─────────────────────────────────────────────────────────
 
-        private void OnDestroy()       => StopServer();
+        private void OnDestroy() => StopServer();
         private void OnApplicationQuit() => StopServer();
 
         public void StopServer()
