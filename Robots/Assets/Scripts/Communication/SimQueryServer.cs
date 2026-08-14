@@ -145,6 +145,9 @@ namespace RobotSimulator.Communication
                     case "get_safety_warnings":
                         return HandleGetSafetyWarnings();
 
+                    case "get_proximity_scan":
+                        return HandleGetProximityScan();
+
                     default:
                         return $"{{\"status\":\"error\",\"message\":\"unknown query: {q.command}\"}}";
                 }
@@ -195,6 +198,41 @@ namespace RobotSimulator.Communication
                 return "{\"status\":\"ok\",\"objects\":[]}";
 
             return SimCamera.Instance.GetCachedDetectionsJson();
+        }
+
+        // ── Proximity query ───────────────────────────────────────────────────
+
+        private string HandleGetProximityScan()
+        {
+            if (ProximitySensor.Instance == null)
+                return "{\"status\":\"error\",\"message\":\"ProximitySensor not found\"}";
+
+            float[] scan     = ProximitySensor.Instance.GetCachedScan();
+            float   fov      = ProximitySensor.Instance.ScanFovDegrees;
+            float   maxRange = ProximitySensor.Instance.MaxRange;
+
+            // InvariantCulture matters: a machine set to a comma-decimal
+            // locale would otherwise emit "3,50" and break Python's parse.
+            var ic = System.Globalization.CultureInfo.InvariantCulture;
+
+            // max_range lets Python auto-calibrate its slow-down band to the
+            // sensor's actual reach (a mismatch here once made "completely
+            // clear" indistinguishable from "obstacle at max range").
+            var sb = new System.Text.StringBuilder();
+            sb.Append("{\"status\":\"ok\",\"fov\":");
+            sb.Append(fov.ToString("F1", ic));
+            sb.Append(",\"count\":");
+            sb.Append(scan.Length);
+            sb.Append(",\"max_range\":");
+            sb.Append(maxRange.ToString("F2", ic));
+            sb.Append(",\"distances\":[");
+            for (int i = 0; i < scan.Length; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append(scan[i].ToString("F2", ic));
+            }
+            sb.Append("]}");
+            return sb.ToString();
         }
 
         // ── Lifecycle ─────────────────────────────────────────────────────────

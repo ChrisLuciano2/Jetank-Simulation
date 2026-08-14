@@ -158,10 +158,35 @@ namespace RobotSimulator.Editor
                 Debug.Log("[SceneSetup] Robotic arm already in scene");
             }
 
-            // ── 7. Run In Background ──────────────────────────────────────────
+            // ── 7. ProximitySensor on the truck ───────────────────────────────
+            // Must sit on the SAME GameObject as TruckController: the rays are
+            // cast along that transform's forward, so putting it on a parent or
+            // a child with its own rotation silently skews every bearing the
+            // Python side computes.
+            if (truckObj != null && truckObj.GetComponent<ProximitySensor>() == null)
+            {
+                truckObj.AddComponent<ProximitySensor>();
+                Debug.Log("[SceneSetup] Added ProximitySensor to " + truckObj.name);
+                changed = true;
+            }
+
+            // ── 8. Obstacle course ────────────────────────────────────────────
+            // Colliders are what the sensor rays actually hit, so these are
+            // primitives (which come with one) rather than bare renderers.
+            if (GameObject.Find(ObstacleRoot) == null)
+            {
+                CreateObstacleCourse();
+                changed = true;
+            }
+            else
+            {
+                Debug.Log("[SceneSetup] Obstacle course already in scene");
+            }
+
+            // ── 9. Run In Background ──────────────────────────────────────────
             PlayerSettings.runInBackground = true;
 
-            // ── 8. Save scene ─────────────────────────────────────────────────
+            // ── 10. Save scene ────────────────────────────────────────────────
             if (changed)
             {
                 EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
@@ -176,11 +201,66 @@ namespace RobotSimulator.Editor
                 "  SimCamera         (on Main Camera)\n" +
                 "  Truck_01          (TruckController)\n" +
                 "  RoboticArm        (mounted on truck)\n" +
+                "  ProximitySensor   (13-ray scan on the truck)\n" +
+                "  Obstacles         (red DetectableObject props)\n" +
                 "  Run In Background ON\n\n" +
                 "Press Play, then run:\n" +
-                "  python test_all.py 1",
+                "  py -3.8 test_all.py 1\n" +
+                "  py -3.8 test_gap_navigation.py 30",
                 "OK"
             );
+        }
+
+        // ── Obstacle course ───────────────────────────────────────────────────
+
+        private const string ObstacleRoot = "Obstacles";
+        private const string DetectableTag = "DetectableObject";
+
+        // Laid out ahead of the truck's spawn at the origin, deliberately
+        // mixed: a thin pole (invisible to widely-spaced rays), a pair
+        // forming a threadable doorway, and offset blocks to steer around.
+        private static readonly (string name, Vector3 pos, Vector3 scale)[] Obstacles =
+        {
+            ("Pole",       new Vector3( 0.2f, 0.5f,  6f),  new Vector3(0.3f, 1f, 0.3f)),
+            ("Door_Left",  new Vector3(-3f,   0.5f, 12f),  new Vector3(2f,   1f, 1f)),
+            ("Door_Right", new Vector3( 3f,   0.5f, 12f),  new Vector3(2f,   1f, 1f)),
+            ("Block_A",    new Vector3(-2f,   0.5f, 18f),  new Vector3(1.5f, 1f, 1.5f)),
+            ("Block_B",    new Vector3( 2.5f, 0.5f, 22f),  new Vector3(1.5f, 1f, 1.5f)),
+        };
+
+        private static void CreateObstacleCourse()
+        {
+            var root = new GameObject(ObstacleRoot);
+
+            // jetbot_nav.perception picks targets out by HSV hue, so the
+            // colour here is load-bearing, not decoration — it must land
+            // inside perception.COLOR_RANGES["red"].
+            var mat = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            mat.color = new Color(0.85f, 0.08f, 0.08f);
+
+            bool tagExists = System.Array.IndexOf(
+                UnityEditorInternal.InternalEditorUtility.tags, DetectableTag) >= 0;
+
+            foreach (var (name, pos, scale) in Obstacles)
+            {
+                var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                go.name = name;
+                go.transform.SetParent(root.transform);
+                go.transform.position   = pos;
+                go.transform.localScale = scale;
+                go.GetComponent<Renderer>().sharedMaterial = mat;
+
+                if (tagExists) go.tag = DetectableTag;
+            }
+
+            if (!tagExists)
+                Debug.LogWarning($"[SceneSetup] Tag '{DetectableTag}' does not exist, so " +
+                    "the obstacles were left untagged and SimCamera's detect_objects will " +
+                    "report nothing. Add it under Edit > Project Settings > Tags and Layers, " +
+                    "then re-run this tool. (jetbot_nav.perception detects them by colour " +
+                    "regardless, so gap-following and colour-seeking still work without it.)");
+
+            Debug.Log($"[SceneSetup] Created obstacle course ({Obstacles.Length} props)");
         }
     }
 }

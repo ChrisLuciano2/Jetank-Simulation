@@ -18,12 +18,17 @@ SenSym-Robot/
 │           ├── TruckController.cs              ← drives the simulated truck
 │           ├── RoboticArmNetworkController.cs  ← drives the simulated arm
 │           ├── SimCamera.cs                    ← virtual camera + object detection
+│           ├── ProximitySensor.cs              ← 13-ray / 120° scanning "lidar"
 │           └── Communication/
 │               ├── TcpServer.cs       ← control commands  (port 5555)
-│               └── SimQueryServer.cs  ← camera/detection  (port 5556)
+│               └── SimQueryServer.cs  ← camera/detection/scan  (port 5556)
 │
 └── Python/                          ← place your JetBot scripts here
     ├── sim_client.py        ← internal TCP client (shared by all shims)
+    ├── jetbot_nav/          ← navigation helpers (NOT a hardware shim)
+    │   ├── perception.py    ← OpenCV HSV colour-blob detection
+    │   ├── gap_follow.py    ← follow-the-gap obstacle avoidance
+    │   └── target_seek.py   ← gap-following biased toward a colour target
     ├── jetbot/              ← drop-in for the real jetbot library
     │   ├── __init__.py
     │   └── robot.py         ← Robot class → "set_motors" TCP command
@@ -181,6 +186,54 @@ transparent to the student.  They write the same TRT code; the shim handles the 
 |-----------|----------|-------|
 | `get_frame` | `{"status":"ok","jpeg":"<b64>"}` | 640×480 JPEG, base-64 encoded |
 | `detect_objects` | `{"status":"ok","objects":[...]}` | Each: `class`, `x1`, `y1`, `x2`, `y2`, `conf` |
+| `get_proximity_scan` | `{"status":"ok","fov":120.0,"count":13,"max_range":12.0,"distances":[...]}` | Ray distances left→right across the fan; a ray reads `max_range` when it hits nothing |
+
+---
+
+## Navigation — `jetbot_nav/`
+
+Unlike `jetbot/`, `SCSCtrl/`, and the rest, **`jetbot_nav/` is not a shim.** It is
+real navigation code that runs identically in simulation and on hardware, layered
+on top of the shims. Nothing in it is simulation-aware.
+
+| Module | What it does | Needs |
+|--------|--------------|-------|
+| `perception` | HSV colour thresholding on a raw RGB frame → blob bounding boxes | numpy, opencv-python |
+| `gap_follow` | Follow-the-gap avoidance: marks rays beyond `GAP_THRESHOLD` free, finds contiguous runs wide enough to fit through, steers at the chosen gap's centre. `FORWARD` / `PIVOT` / `BACKUP` / `SEARCH` recovery states. | stdlib only |
+| `target_seek` | `SeekingGapFollowController` — biases *which gap* `gap_follow` prefers toward a target's bearing, rather than blending steering values. Target bias is suppressed entirely during recovery states. | stdlib only |
+
+```python
+from jetbot_nav import gap_follow
+gap_follow.drive_with_gap_following(duration=20.0)
+```
+
+### Hardware parity
+
+`gap_follow` widens the sensor contract: the physical robot must supply an
+equivalent scan — an ultrasonic/IR sensor swept by a servo on the JETANK's TTL bus,
+or a low-cost 2D lidar downsampled to N rays. The robot-side code only has to answer
+`get_proximity_scan` with the shape in the table above; all Python logic then runs
+unchanged. Three fixed sensors are **not** enough — the angular blind zones between
+them are what this design exists to close.
+
+### Testing
+
+Both suites are fully offline — no Unity, no hardware:
+
+```bash
+py -3.8 test_gap_logic.py
+```
+
+`test_gap_logic.py` is a closed-loop test: it contains a miniature 2D simulator with
+real raycasting and differential-drive kinematics, so the controller's steering
+changes what it senses next. `test_target_seek.py` covers the seeking layer.
+Recorded field failures replay from `test_data/` — see the README there.
+
+Live tests, with Unity playing:
+
+```bash
+py -3.8 test_gap_navigation.py 30 myrun.csv
+```
 
 ---
 
@@ -208,6 +261,9 @@ entirely in Python (same equations as real hardware) — no extra TCP round-trip
 | Camera frames are black | Attach SimCamera to the Main Camera GameObject |
 | No detections returned | Tag scene objects with **DetectableObject** |
 | Arm doesn't move | Confirm RoboticArmNetworkController is on the arm root |
+| `Could not read the proximity scan` | ProximitySensor isn't on the truck — run Tools → Setup Robot Simulator Scene |
+| Robot never drives, sits in SEARCH/PIVOT | ProximitySensor `Max Range` is below `gap_follow.GAP_THRESHOLD`, so no ray ever reads "free" (the Console warns about this) |
+| Rays pass through obstacles | Obstacles need **Colliders**, not just Renderers, with Is Trigger **off** |
 | Tank-turn appears sluggish | The controller adds a tiny forward nudge for zero-throttle spins — this is by design |
 | `portClose()` crashes | It is a no-op in simulation; this is expected and safe |
 

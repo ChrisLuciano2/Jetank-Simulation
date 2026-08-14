@@ -1,2 +1,11 @@
-# No external dependencies required
-# unity_client.py uses only Python standard library (socket, json, threading)
+# Core simulation client (sim_client.py, unity_client.py, the jetbot/
+# SCSCtrl/tensorrt shims) uses only the standard library — nothing to
+# install to drive the robot or run the offline test suites.
+
+# Needed by jetson_utils (camera frames) and jetbot_nav.perception
+# (HSV colour-blob detection):
+numpy
+opencv-python
+
+# Both are already present on the physical Jetson Nano image, so this
+# file is only for the PC running the simulation.
