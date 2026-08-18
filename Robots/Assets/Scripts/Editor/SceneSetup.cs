@@ -13,6 +13,13 @@ namespace RobotSimulator.Editor
         {
             bool changed = false;
 
+            // Version stamp. If this line is missing from the Console after
+            // running the menu item, Unity is executing a STALE COMPILE of
+            // this file (usually an unrelated compile error elsewhere in the
+            // project blocking the reload) and none of the steps below are
+            // the ones you are reading.
+            Debug.Log("[SceneSetup] running rev 3 (robot-mounted camera)");
+
             // ── 1. TcpServer (port 5555) ──────────────────────────────────────
             if (Object.FindFirstObjectByType<TcpServer>() == null)
             {
@@ -36,19 +43,21 @@ namespace RobotSimulator.Editor
             // perception, target_seek) computes bearings relative to the
             // ROBOT, so the feed has to come from a robot-mounted camera —
             // see step 7. Strip any SimCamera left on the overview camera.
+            // The SimCamera move itself happens in step 7, which owns all
+            // camera placement — doing half of it here made step 7 depend on
+            // Camera.main having been found, and a scene where that lookup
+            // fails would silently keep the old world-fixed feed.
             Camera mainCam = Camera.main;
             if (mainCam != null)
             {
-                var stale = mainCam.GetComponent<SimCamera>();
-                if (stale != null)
-                {
-                    Object.DestroyImmediate(stale);
-                    Debug.Log("[SceneSetup] Removed SimCamera from the overview " +
-                              "Main Camera — it now lives on the robot (step 7)");
-                    changed = true;
-                }
                 mainCam.transform.position = new Vector3(0f, 3.5f, -5f);
                 mainCam.transform.rotation = Quaternion.Euler(20f, 0f, 0f);
+            }
+            else
+            {
+                Debug.LogWarning("[SceneSetup] No camera tagged MainCamera — the "
+                    + "human overview view was left alone. This does not affect "
+                    + "the robot camera (step 7).");
             }
 
             // ── 4. Ground plane ───────────────────────────────────────────────
@@ -167,10 +176,51 @@ namespace RobotSimulator.Editor
             }
 
             // ── 7. Robot-mounted camera (the one Python actually sees) ────────
-            if (truckObj != null && Object.FindFirstObjectByType<SimCamera>() == null)
+            // Python's whole camera pipeline computes bearings and distances
+            // relative to the ROBOT, so the feed has to come from a camera
+            // that moves with it. Historically SimCamera sat on the
+            // world-fixed overview camera, which produced confident nonsense
+            // rather than an error — visual_scan reported the robot's own
+            // chassis as an obstacle a metre ahead.
+            //
+            // The condition is "is there a SimCamera UNDER THE TRUCK", not
+            // "is there a SimCamera anywhere": the latter is satisfied by the
+            // very misconfiguration this is meant to repair, so the tool
+            // would report success having changed nothing. Inactive objects
+            // are included, since a disabled leftover still blocks the
+            // singleton.
+            if (truckObj != null)
             {
-                CreateRobotCamera(truckObj);
-                changed = true;
+                var cams = Object.FindObjectsByType<SimCamera>(
+                    FindObjectsInactive.Include, FindObjectsSortMode.None);
+
+                SimCamera onRobot = null;
+                foreach (var c in cams)
+                    if (c.transform.IsChildOf(truckObj.transform)) { onRobot = c; break; }
+
+                if (onRobot != null)
+                {
+                    Debug.Log($"[SceneSetup] Robot camera already present on "
+                              + $"'{onRobot.gameObject.name}' — left as is");
+                }
+                else
+                {
+                    foreach (var c in cams)
+                    {
+                        Debug.Log($"[SceneSetup] Removing SimCamera from "
+                                  + $"'{c.gameObject.name}' — it is not on the robot");
+                        Object.DestroyImmediate(c);
+                        changed = true;
+                    }
+                    CreateRobotCamera(truckObj);
+                    changed = true;
+                }
+            }
+            else
+            {
+                Debug.LogError("[SceneSetup] No TruckController in the scene, so "
+                    + "there is nothing to mount the camera on. Python's camera "
+                    + "pipeline will not work until this is fixed.");
             }
 
             // ── 8. ProximitySensor on the truck ───────────────────────────────
@@ -208,21 +258,32 @@ namespace RobotSimulator.Editor
                 EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo();
             }
 
+            // Report what the scene ACTUALLY contains now, rather than a fixed
+            // list of what the tool intended to do. A dialog that claims
+            // success regardless is worse than no dialog: the previous version
+            // said "RobotCamera — on the robot" while SimCamera was still
+            // sitting on the world-fixed overview camera.
+            var sim = Object.FindFirstObjectByType<SimCamera>();
+            string camWhere;
+            if (sim == null)
+                camWhere = "MISSING — Python will get no frames";
+            else if (truckObj != null && sim.transform.IsChildOf(truckObj.transform))
+                camWhere = $"on '{sim.gameObject.name}' (correct: moves with the robot)";
+            else
+                camWhere = $"on '{sim.gameObject.name}' — NOT on the robot, "
+                           + "distances and headings will be wrong";
+
             EditorUtility.DisplayDialog(
                 "Scene Setup Complete",
-                "Everything added:\n\n" +
-                "  TcpServer         (port 5555)\n" +
-                "  SimQueryServer    (port 5556)\n" +
-                "  SimCamera         (on Main Camera)\n" +
-                "  Truck_01          (TruckController)\n" +
-                "  RoboticArm        (mounted on truck)\n" +
-                "  RobotCamera       (SimCamera — Python's eye, on the robot)\n" +
-                "  ProximitySensor   (debug ground truth only)\n" +
-                "  Obstacles         (red DetectableObject props)\n" +
-                "  Run In Background ON\n\n" +
-                "Press Play, then run:\n" +
-                "  py -3.8 test_all.py 1\n" +
-                "  py -3.8 test_gap_navigation.py 30",
+                "Scene now contains:\n\n" +
+                $"  TcpServer        {(Object.FindFirstObjectByType<TcpServer>() != null ? "yes" : "MISSING")}\n" +
+                $"  SimQueryServer   {(Object.FindFirstObjectByType<SimQueryServer>() != null ? "yes" : "MISSING")}\n" +
+                $"  Robot            {(truckObj != null ? truckObj.name : "MISSING")}\n" +
+                $"  ProximitySensor  {(Object.FindFirstObjectByType<ProximitySensor>() != null ? "yes (dev ground truth)" : "MISSING")}\n" +
+                $"  Obstacles        {(GameObject.Find(ObstacleRoot) != null ? "yes" : "MISSING")}\n" +
+                $"  SimCamera        {camWhere}\n\n" +
+                "Press Play, then verify the camera pipeline with:\n" +
+                "  py -3.8 validate_camera.py --save",
                 "OK"
             );
         }
