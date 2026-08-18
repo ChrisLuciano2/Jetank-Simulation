@@ -11,13 +11,46 @@ namespace RobotSimulator.Editor
         [MenuItem("Tools/Setup Robot Simulator Scene")]
         public static void SetupScene()
         {
+            // Running this during Play is doubly futile, and it is an easy
+            // trap because the Python harness needs the sim PLAYING to
+            // connect — so the natural workflow is to leave it running and
+            // invoke the tool alongside it. That silently fails twice over:
+            //
+            //   1. Unity does not recompile scripts while playing, so the
+            //      menu item that runs is whatever was compiled BEFORE Play
+            //      started, no matter what the file on disk says.
+            //   2. Scene changes made during Play are discarded when Play
+            //      stops, so even a correctly compiled run throws away its
+            //      own work.
+            //
+            // Both are invisible: the tool appears to succeed and the scene
+            // appears unchanged, which is indistinguishable from a bug in
+            // the tool. Refuse instead.
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                EditorUtility.DisplayDialog(
+                    "Stop Play Mode First",
+                    "Unity will not recompile scripts while playing, and any "
+                    + "scene changes made now are discarded when Play stops.\n\n"
+                    + "  1. Press Stop\n"
+                    + "  2. Wait for the recompile to finish\n"
+                    + "  3. Run this tool again\n"
+                    + "  4. Save the scene, then press Play\n\n"
+                    + "The Console should show a \"running rev\" line when the "
+                    + "tool actually executes. If it does not, Unity is still "
+                    + "on a stale compile.",
+                    "OK");
+                Debug.LogWarning("[SceneSetup] Aborted: cannot set up the scene "
+                    + "during Play mode. Stop, let scripts recompile, re-run.");
+                return;
+            }
+
             bool changed = false;
 
             // Version stamp. If this line is missing from the Console after
             // running the menu item, Unity is executing a STALE COMPILE of
-            // this file (usually an unrelated compile error elsewhere in the
-            // project blocking the reload) and none of the steps below are
-            // the ones you are reading.
+            // this file and none of the steps below are the ones you are
+            // reading. Bump it whenever this file changes meaningfully.
             Debug.Log("[SceneSetup] running rev 3 (robot-mounted camera)");
 
             // ── 1. TcpServer (port 5555) ──────────────────────────────────────
