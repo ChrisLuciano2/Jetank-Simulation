@@ -66,5 +66,10 @@ ENV/
 .vscode/
 .idea/
 .vs/
+.vsconfig
+
+# Scratch telemetry from live drives. Recordings kept as regression
+# fixtures live in Python/test_data/ and are NOT matched by this.
+/Python/*.csv
 *.swp
 *.swo

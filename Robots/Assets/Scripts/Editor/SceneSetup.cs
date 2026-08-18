@@ -29,14 +29,22 @@ namespace RobotSimulator.Editor
                 changed = true;
             }
 
-            // ── 3. SimCamera on Main Camera ───────────────────────────────────
+            // ── 3. Main Camera stays the HUMAN's overview ─────────────────────
+            // SimCamera used to live here, which meant Python's "robot camera"
+            // was a world-fixed spectator view that never moved with the robot.
+            // Every camera-driven behaviour (jetbot_nav.visual_scan,
+            // perception, target_seek) computes bearings relative to the
+            // ROBOT, so the feed has to come from a robot-mounted camera —
+            // see step 7. Strip any SimCamera left on the overview camera.
             Camera mainCam = Camera.main;
             if (mainCam != null)
             {
-                if (mainCam.GetComponent<SimCamera>() == null)
+                var stale = mainCam.GetComponent<SimCamera>();
+                if (stale != null)
                 {
-                    mainCam.gameObject.AddComponent<SimCamera>();
-                    Debug.Log("[SceneSetup] Added SimCamera to Main Camera");
+                    Object.DestroyImmediate(stale);
+                    Debug.Log("[SceneSetup] Removed SimCamera from the overview " +
+                              "Main Camera — it now lives on the robot (step 7)");
                     changed = true;
                 }
                 mainCam.transform.position = new Vector3(0f, 3.5f, -5f);
@@ -158,7 +166,14 @@ namespace RobotSimulator.Editor
                 Debug.Log("[SceneSetup] Robotic arm already in scene");
             }
 
-            // ── 7. ProximitySensor on the truck ───────────────────────────────
+            // ── 7. Robot-mounted camera (the one Python actually sees) ────────
+            if (truckObj != null && Object.FindFirstObjectByType<SimCamera>() == null)
+            {
+                CreateRobotCamera(truckObj);
+                changed = true;
+            }
+
+            // ── 8. ProximitySensor on the truck ───────────────────────────────
             // Must sit on the SAME GameObject as TruckController: the rays are
             // cast along that transform's forward, so putting it on a parent or
             // a child with its own rotation silently skews every bearing the
@@ -170,7 +185,7 @@ namespace RobotSimulator.Editor
                 changed = true;
             }
 
-            // ── 8. Obstacle course ────────────────────────────────────────────
+            // ── 9. Obstacle course ────────────────────────────────────────────
             // Colliders are what the sensor rays actually hit, so these are
             // primitives (which come with one) rather than bare renderers.
             if (GameObject.Find(ObstacleRoot) == null)
@@ -183,10 +198,10 @@ namespace RobotSimulator.Editor
                 Debug.Log("[SceneSetup] Obstacle course already in scene");
             }
 
-            // ── 9. Run In Background ──────────────────────────────────────────
+            // ── 10. Run In Background ─────────────────────────────────────────
             PlayerSettings.runInBackground = true;
 
-            // ── 10. Save scene ────────────────────────────────────────────────
+            // ── 11. Save scene ────────────────────────────────────────────────
             if (changed)
             {
                 EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
@@ -201,7 +216,8 @@ namespace RobotSimulator.Editor
                 "  SimCamera         (on Main Camera)\n" +
                 "  Truck_01          (TruckController)\n" +
                 "  RoboticArm        (mounted on truck)\n" +
-                "  ProximitySensor   (13-ray scan on the truck)\n" +
+                "  RobotCamera       (SimCamera — Python's eye, on the robot)\n" +
+                "  ProximitySensor   (debug ground truth only)\n" +
                 "  Obstacles         (red DetectableObject props)\n" +
                 "  Run In Background ON\n\n" +
                 "Press Play, then run:\n" +
@@ -209,6 +225,42 @@ namespace RobotSimulator.Editor
                 "  py -3.8 test_gap_navigation.py 30",
                 "OK"
             );
+        }
+
+        // ── Robot camera ──────────────────────────────────────────────────────
+
+        // These four numbers ARE the calibration. jetbot_nav.visual_scan turns
+        // pixels into distances using the camera's height, tilt and FOV, so
+        // they must match CameraGeometry on the Python side exactly —
+        // visual_scan.SIM_JETANK mirrors them. Change one, change both, or
+        // every reported distance is wrong by a constant factor while still
+        // looking entirely plausible.
+        public const float CamHeight = 0.80f;   // above the truck's origin
+        public const float CamForward = 0.80f;  // toward the front bumper
+        public const float CamTiltDeg = 20f;    // downward pitch
+        public const float CamFovDeg = 48.8f;   // VERTICAL fov of an IMX219
+                                                // (62.2 horizontal at 4:3)
+
+        private static void CreateRobotCamera(GameObject truckObj)
+        {
+            var camObj = new GameObject("RobotCamera");
+            camObj.transform.SetParent(truckObj.transform);
+            camObj.transform.localPosition = new Vector3(0f, CamHeight, CamForward);
+            camObj.transform.localRotation = Quaternion.Euler(CamTiltDeg, 0f, 0f);
+
+            var cam = camObj.AddComponent<Camera>();
+            cam.fieldOfView = CamFovDeg;
+
+            // Disabled so it never draws to the game view — SimCamera calls
+            // cam.Render() explicitly into its own RenderTexture, which works
+            // fine on a disabled Camera and costs nothing the rest of the time.
+            cam.enabled = false;
+
+            camObj.AddComponent<SimCamera>();
+
+            Debug.Log($"[SceneSetup] Created RobotCamera on {truckObj.name} " +
+                      $"(height {CamHeight}, forward {CamForward}, tilt {CamTiltDeg} deg, " +
+                      $"fov {CamFovDeg} deg) — keep jetbot_nav.visual_scan.SIM_JETANK in sync");
         }
 
         // ── Obstacle course ───────────────────────────────────────────────────

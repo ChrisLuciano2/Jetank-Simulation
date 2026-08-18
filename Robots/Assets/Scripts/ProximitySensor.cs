@@ -1,31 +1,35 @@
 ﻿using UnityEngine;
 
 /// <summary>
-/// ProximitySensor - attach to the robot (JETANK / truck) GameObject.
+/// ProximitySensor - DEVELOPMENT GROUND TRUTH ONLY. Not a deployment path.
 ///
 /// Casts an ARC of rays each Update() across scanFovDegrees centered on
-/// the robot's forward direction (local +Z) - a cheap 2D "lidar" scan.
-/// A wide fan rather than a few fixed rays is deliberate: 30-degree
-/// spacing leaves angular blind zones big enough that a narrow object
-/// slightly off-center is invisible until contact, and a single
-/// wall-side ray grazing a wall at a shallow angle reads "too close"
-/// even while the robot is making fine progress alongside it.
+/// the robot's forward direction (local +Z) and answers
+/// get_proximity_scan with the result.
 ///
-/// PHYSICAL-HARDWARE PARITY: the real robot must provide an equivalent
-/// scan - e.g. an ultrasonic/IR sensor swept by a servo on the JETANK's
-/// TTL bus (driven via SCSCtrl), or a low-cost 2D lidar downsampled to
-/// rayCount beams. The Python side (jetbot_nav.gap_follow) only needs
-/// get_proximity_scan answered with the same shape.
+/// THIS IS NOT HARDWARE THE ROBOT HAS. The physical JETANK has a camera
+/// and nothing else - no lidar, no ultrasonic. Casting 13 rays
+/// simultaneously every frame is a 2D lidar, and an earlier claim that a
+/// servo-swept ultrasonic was an equivalent substitute does not hold up:
+/// a swept sensor returns readings SEQUENTIALLY over ~0.5-2 s (during
+/// which the robot has moved and rotated, while gap_follow's tick-based
+/// debounce assumes one coherent instantaneous snapshot), and it sees a
+/// wide echo cone rather than an infinitely thin ray.
+///
+/// The real sensing path is jetbot_nav.visual_scan, which derives the
+/// same {angles, distances} shape from the RobotCamera image via
+/// ground-plane projection, and therefore runs identically on the Jetson.
+///
+/// KEEP THIS COMPONENT for what it is genuinely good for: it reports
+/// exact geometric truth, so it is the reference to check visual_scan
+/// against. If the two disagree, the vision pipeline is miscalibrated
+/// (or is hitting one of its documented blind spots - overhangs,
+/// floor-coloured objects, non-flat ground). Useful precisely BECAUSE it
+/// cheats. Never ship behaviour that depends on it.
 ///
 /// SETUP:
 ///   1. Attach to the same GameObject as TruckController.
 ///   2. Obstacles need Colliders (not just Renderers), Is Trigger OFF.
-///
-/// The defaults below are matched to jetbot_nav.gap_follow's constants -
-/// in particular maxRange MUST stay above Python's GAP_THRESHOLD, or no
-/// ray can ever read as "free" and the controller never leaves its
-/// recovery states. The failure is silent (rays just come up short, no
-/// error), so OnValidate() flags a mismatch in the Inspector.
 ///
 /// SimQueryServer reads cached values from a background thread; the scan
 /// array is republished by reference swap each frame so readers always

@@ -199,22 +199,51 @@ on top of the shims. Nothing in it is simulation-aware.
 | Module | What it does | Needs |
 |--------|--------------|-------|
 | `perception` | HSV colour thresholding on a raw RGB frame → blob bounding boxes | numpy, opencv-python |
+| `visual_scan` | Ground-plane projection: camera frame → free-space distances, in the shape `gap_follow` consumes | numpy, opencv-python |
 | `gap_follow` | Follow-the-gap avoidance: marks rays beyond `GAP_THRESHOLD` free, finds contiguous runs wide enough to fit through, steers at the chosen gap's centre. `FORWARD` / `PIVOT` / `BACKUP` / `SEARCH` recovery states. | stdlib only |
 | `target_seek` | `SeekingGapFollowController` — biases *which gap* `gap_follow` prefers toward a target's bearing, rather than blending steering values. Target bias is suppressed entirely during recovery states. | stdlib only |
 
+### Hardware parity — the camera is the only sensor
+
+**The JETANK has a camera and nothing else.** No lidar, no ultrasonic. So the
+obstacle scan is computed *in Python* from the camera image, by finding where the
+floor stops in each image column and projecting that pixel onto the ground plane.
+Unity's only job is to hand over a rendered frame, which it already does honestly —
+there is no simulation-only sensor in the loop, and the identical code runs on the
+Jetson against the identical frame shape.
+
 ```python
-from jetbot_nav import gap_follow
-gap_follow.drive_with_gap_following(duration=20.0)
+import jetson_utils
+from jetbot_nav import visual_scan
+
+cam  = jetson_utils.videoSource("csi://0")
+geom = visual_scan.sim_jetank()             # or CameraGeometry(height_m=…, tilt_deg=…)
+scan = visual_scan.get_visual_scan(cam, geom)
 ```
 
-### Hardware parity
+`gap_follow` is agnostic — it consumes `{"angles_deg", "distances", "max_range"}` and
+doesn't care how the numbers were produced, so the controller and its regression
+suite stay valid on top of a completely different sensing front-end.
 
-`gap_follow` widens the sensor contract: the physical robot must supply an
-equivalent scan — an ultrasonic/IR sensor swept by a servo on the JETANK's TTL bus,
-or a low-cost 2D lidar downsampled to N rays. The robot-side code only has to answer
-`get_proximity_scan` with the shape in the table above; all Python logic then runs
-unchanged. Three fixed sensors are **not** enough — the angular blind zones between
-them are what this design exists to close.
+**Calibration is load-bearing.** Camera height, downward tilt and FOV are what turn
+pixels into metres. Measure height and tilt once with a ruler and a phone level; a
+20% height error is a 20% range error, and it *looks* plausible. The simulated
+mounting lives in `SceneSetup.cs` (`CamHeight` / `CamTiltDeg` / `CamFovDeg`) and is
+mirrored by `visual_scan.sim_jetank()` — change one, change both.
+
+**Known limits, all inherent to seeing with a camera:**
+
+- **Near blind zone.** Anything closer than `geom.min_visible_range()` (~0.8 units as
+  mounted) is invisible and reads as *open floor*, not as an error.
+- **No peripheral vision.** ~62° of lens, against the 120° a range fan gave.
+- **Flat floor assumed.** Ramps and steps read as the wrong distance; overhangs
+  (a table edge with clear space beneath) are invisible entirely.
+- **Floor-coloured obstacles** are invisible, for the same reason `perception` can't
+  find a red block on a red mat.
+
+`ProximitySensor.cs` still exists and still answers `get_proximity_scan`, but it is
+**development ground truth only** — it reports exact geometry, which makes it the
+reference to validate `visual_scan` against. Never ship behaviour that depends on it.
 
 ### Testing
 
@@ -227,7 +256,9 @@ py -3.8 test_gap_logic.py
 `test_gap_logic.py` is a closed-loop test: it contains a miniature 2D simulator with
 real raycasting and differential-drive kinematics, so the controller's steering
 changes what it senses next. `test_target_seek.py` covers the seeking layer.
-Recorded field failures replay from `test_data/` — see the README there.
+`test_visual_scan.py` pins the camera projection against hand-computed distances —
+a segmentation bug is loud, but a projection bug returns plausible numbers that are
+uniformly wrong. Recorded field failures replay from `test_data/`.
 
 Live tests, with Unity playing:
 
