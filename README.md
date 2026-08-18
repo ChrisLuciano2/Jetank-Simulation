@@ -306,6 +306,23 @@ Live tests, with Unity playing:
 py -3.8 test_gap_navigation.py 30 myrun.csv
 ```
 
+### Validating against real renders
+
+The offline suites verify the geometry against synthetic frames, which cannot tell you
+whether the floor segments under the scene's actual lighting, or whether there's enough
+texture near the horizon for a heading lock. Run this once after any change to the
+camera mounting, the lighting, or the floor material:
+
+```bash
+py -3.8 validate_camera.py --save
+```
+
+It compares `visual_scan` against `ProximitySensor`'s exact geometry, and `heading`
+against commanded `set_rotation` values. Both references are Unity-only with no hardware
+equivalent — which is precisely why they belong in a validation tool and nowhere near
+the navigation code. `--save` writes annotated PNGs for eyeballing the floor mask and
+the heading band.
+
 ---
 
 ## Servo ID → Unity Arm Joint Mapping

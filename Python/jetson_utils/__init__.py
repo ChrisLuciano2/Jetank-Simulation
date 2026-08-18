@@ -17,6 +17,12 @@ All attributes and methods match the real jetson_utils interface so student
 code runs without changes.
 """
 
+# Defers annotation evaluation (PEP 563), so the `list | None` hints below
+# stay valid on Python 3.8 — the version this project and the Jetson Nano
+# image both run. Without it this module raises TypeError at IMPORT time,
+# which takes the camera, perception and visual_scan down with it.
+from __future__ import annotations
+
 import base64
 import time
 import numpy as np
