@@ -14,12 +14,18 @@ of the shim packages.
 MODULES
     perception   — OpenCV colour-blob detection on a raw RGB frame
     visual_scan  — free-space distance scan derived from a camera frame
+    heading      — relative yaw from the camera (visual gyro + course lock)
     gap_follow   — follow-the-gap obstacle avoidance from an N-ray scan
     target_seek  — gap_follow biased toward a colour-detected target
 
-The sensing modules (perception, visual_scan) need numpy + opencv-python
-(see requirements.txt); the control modules (gap_follow, target_seek) are
-standard library only, so their offline suites run with no extra install.
+visual_scan and heading split the frame between them: visual_scan walks up
+from the bottom for near-field DISTANCE, heading reads the band around the
+horizon for far-field ROTATION. One camera, two non-overlapping jobs.
+
+The sensing modules (perception, visual_scan, heading) need numpy
+(+ opencv-python for perception and visual_scan); the control modules
+(gap_follow, target_seek) are standard library only, so their offline
+suites run with no extra install.
 
 visual_scan is what feeds gap_follow on this robot: the JETANK has a
 camera and no lidar, so the scan is computed from the image rather than
@@ -30,9 +36,9 @@ distance array and does not care how the numbers were produced.
 from . import gap_follow
 from . import target_seek
 
-__all__ = ["gap_follow", "target_seek", "perception", "visual_scan"]
+__all__ = ["gap_follow", "target_seek", "perception", "visual_scan", "heading"]
 
-_LAZY = {"perception", "visual_scan"}
+_LAZY = {"perception", "visual_scan", "heading"}
 
 
 def __getattr__(name):

@@ -200,6 +200,7 @@ on top of the shims. Nothing in it is simulation-aware.
 |--------|--------------|-------|
 | `perception` | HSV colour thresholding on a raw RGB frame → blob bounding boxes | numpy, opencv-python |
 | `visual_scan` | Ground-plane projection: camera frame → free-space distances, in the shape `gap_follow` consumes | numpy, opencv-python |
+| `heading` | Relative yaw from the camera — `VisualGyro` (continuous) and `CourseLock` (drift-free snapshot re-acquisition) | numpy |
 | `gap_follow` | Follow-the-gap avoidance: marks rays beyond `GAP_THRESHOLD` free, finds contiguous runs wide enough to fit through, steers at the chosen gap's centre. `FORWARD` / `PIVOT` / `BACKUP` / `SEARCH` recovery states. | stdlib only |
 | `target_seek` | `SeekingGapFollowController` — biases *which gap* `gap_follow` prefers toward a target's bearing, rather than blending steering values. Target bias is suppressed entirely during recovery states. | stdlib only |
 
@@ -253,11 +254,44 @@ Both suites are fully offline — no Unity, no hardware:
 py -3.8 test_gap_logic.py
 ```
 
+### Heading, with no IMU and no encoders
+
+To resume a course after detouring, the robot must know how far it turned — and it
+has no encoders, no IMU, and no access to Unity's transform. The camera is the only
+sensor, so yaw is read from the picture.
+
+`visual_scan` and `heading` split the frame between them: `visual_scan` walks up from
+the bottom for near-field **distance**, `heading` reads the band around the horizon for
+far-field **rotation**. Far content is used because translation moves near content far
+more than distant content, so a whole-frame estimate would blend "I turned" with "I
+drove past something".
+
+```python
+from jetbot_nav import heading, visual_scan
+
+geom = visual_scan.sim_jetank()
+lock = heading.CourseLock(geom)
+lock.capture(frame)                  # about to detour
+...                                  # gap_follow avoids the obstacle
+err = lock.error_deg(frame)          # + means pointing right of course
+```
+
+- **`VisualGyro`** accumulates frame-to-frame yaw. Handles arbitrarily large rotations
+  because each step is small, but drifts.
+- **`CourseLock`** compares the live frame against the *original* photograph, so its
+  error is path-independent and cannot drift. Measurable to ±28° on a 62° lens — past
+  that the two views share no scenery, and it returns `None`.
+
+Both return `None` rather than guess when the view is featureless or the match is
+untrustworthy. A wrong heading is worse than a missing one: the caller can wait out a
+missing one but will confidently drive the wrong way on a fabricated one.
+
 | Suite | Covers |
 |-------|--------|
 | `test_gap_logic.py` | Closed-loop: a miniature 2D simulator with real raycasting and differential-drive kinematics, so the controller's steering changes what it senses next. Recorded field failures replay from `test_data/`. |
 | `test_camera_nav.py` | The **same** scenarios re-run through the camera's narrow FOV and near blind zone, so the cost of real sensing is measured rather than assumed. |
 | `test_visual_scan.py` | Camera projection, pinned against hand-computed distances — a segmentation bug is loud, but a projection bug returns plausible numbers that are uniformly wrong. |
+| `test_heading.py` | Visual yaw. Synthetic frames are rendered through real pinhole geometry rather than by rolling pixels, so the test can't confirm the estimator's own assumptions. |
 | `test_target_seek.py` | The colour-seeking layer on top of gap-following. |
 
 `gap_follow` is tuned for the camera rather than the original 120° fan. `CORRIDOR_HALF`
