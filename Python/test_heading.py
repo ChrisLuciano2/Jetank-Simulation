@@ -276,6 +276,78 @@ check("yaw just inside the range still measures correctly",
       f"got {within}")
 
 
+# ─── 6c. The gate thresholds, against MEASURED values ───────────────────────
+# Both thresholds were originally set from synthetic scenes and were too
+# strict for real renders: MIN_PEAK_PROMINENCE = 1.8 rejected four of six
+# valid measurements from Unity, including a 5 deg turn that missed by
+# 0.01. Rather than leave the choice as a bare constant that the next
+# person re-guesses, pin it against the actual observations from both
+# sides. Rows marked accept=True are correct measurements that MUST get
+# through; accept=False are wrong answers that MUST be rejected.
+
+from jetbot_nav.heading import MIN_PEAK_PROMINENCE
+
+GATE_TABLE = [
+    # (score, prominence, accept, source)
+    (0.755, 1.52, True,  "Unity render, -20 deg (correct)"),
+    (0.935, 1.68, True,  "Unity render, -10 deg (correct)"),
+    (0.972, 1.79, True,  "Unity render,  -5 deg (correct)"),
+    (0.966, 2.16, True,  "Unity render,  +5 deg (correct, +0.57 err)"),
+    (0.905, 2.01, True,  "Unity render, +10 deg (correct, +1.14 err)"),
+    (0.763, 1.66, True,  "Unity render, +20 deg (correct)"),
+    # Repetitive scenery: score is HIGH and the answer is wrong. Only
+    # prominence can see these.
+    (0.989, 1.00, False, "periodic stripes: score high, answer off by 8 deg"),
+    (0.970, 1.00, False, "periodic stripes: score high, answer off by 14 deg"),
+    (0.980, 1.02, False, "periodic stripes: score high, answer off by 14 deg"),
+    # Beyond the measurable range: correlation settles on an interior
+    # impostor. Prominence does NOT reliably catch these (several exceed
+    # the real-match floor), so the score gate has to.
+    (0.4463, 1.17, False, "beyond range, +30 deg -> reported -1.85"),
+    (0.4684, 1.37, False, "beyond range, +35 deg -> reported +2.53"),
+    (0.4808, 1.66, False, "beyond range, +45 deg -> reported +12.54"),
+    (0.4889, 1.71, False, "beyond range, -30 deg -> reported +1.46"),
+    (0.4385, 1.38, False, "beyond range, -35 deg -> reported -3.63"),
+    (0.5001, 1.68, False, "beyond range, +40 deg -> reported +7.56"),
+    (0.5132, 1.49, False, "beyond range, -40 deg -> reported -9.13"),
+    (0.5207, 1.56, False, "beyond range, -45 deg -> reported -14.12"),
+]
+
+
+def accepted(score, prom):
+    return score >= MIN_CONFIDENCE and prom >= MIN_PEAK_PROMINENCE
+
+
+print()
+wrong = []
+for score, prom, want, source in GATE_TABLE:
+    if accepted(score, prom) != want:
+        wrong.append(f"{source}: score {score}, prom {prom} -> "
+                     f"{'wrongly accepted' if not want else 'wrongly rejected'}")
+check("gate thresholds accept every measured-correct match and reject "
+      "every measured-wrong one", not wrong,
+      "; ".join(wrong))
+
+# Each threshold must sit in a GAP between the two populations, not on top
+# of one of them. Sitting on top is how 1.8 came to reject a valid 5 deg
+# turn by 0.01, and how 0.5 came to admit a 45 deg one as -14 deg.
+good_prom = min(p for _, p, a, _ in GATE_TABLE if a)
+bad_prom = max(p for s, p, a, _ in GATE_TABLE
+               if not a and s >= MIN_CONFIDENCE)
+check("prominence threshold sits in a gap between the populations",
+      bad_prom < MIN_PEAK_PROMINENCE < good_prom,
+      f"worst accepted {good_prom}, best score-passing reject {bad_prom}, "
+      f"threshold {MIN_PEAK_PROMINENCE}")
+
+good_score = min(s for s, _, a, _ in GATE_TABLE if a)
+bad_score = max(s for s, p, a, _ in GATE_TABLE
+                if not a and p >= MIN_PEAK_PROMINENCE)
+check("score threshold sits in a gap between the populations",
+      bad_score < MIN_CONFIDENCE < good_score,
+      f"worst accepted {good_score}, best prominence-passing reject "
+      f"{bad_score}, threshold {MIN_CONFIDENCE}")
+
+
 # ─── 7. Works without a CameraGeometry (hardware default lens) ──────────────
 
 plain = CourseLock(None)

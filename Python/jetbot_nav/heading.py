@@ -110,23 +110,47 @@ import numpy as np
 
 # ─── Tuning ──────────────────────────────────────────────────────────────────
 
-MIN_CONFIDENCE = 0.5    # normalised correlation peak below this -> no estimate.
+MIN_CONFIDENCE = 0.65   # normalised correlation peak below this -> no estimate.
                         # A featureless band correlates weakly with everything,
                         # and reporting its argmax would be pure noise dressed
-                        # up as a measurement. Genuine matches score ~0.99 on
-                        # synthetic scenes; spurious out-of-range ones ~0.45.
+                        # up as a measurement.
+                        #
+                        # This gate is what rejects OUT-OF-RANGE rotations,
+                        # where the true alignment lies outside the searched
+                        # span and correlation settles on an interior
+                        # impostor. Those impostors were measured at
+                        # 0.44-0.52 across +-30..45 deg, while correct matches
+                        # score 0.98+ synthetically and 0.755+ on real Unity
+                        # renders. 0.65 sits in that gap. It was 0.5, which
+                        # let three out-of-range cases through as confident
+                        # wrong answers once MIN_PEAK_PROMINENCE was relaxed
+                        # to fit real scenes — the two gates have to be
+                        # retuned together, since each covers what the other
+                        # misses.
 
-MIN_PEAK_PROMINENCE = 1.8   # best score must beat the best WELL-SEPARATED
-                        # rival by this ratio. Catches the failure an absolute
-                        # threshold misses: when the true alignment lies
-                        # outside the search range, correlation still returns
-                        # its argmax, and on repetitive scenery that spurious
-                        # peak can clear any fixed threshold. A real match
-                        # towers over the rest of the curve (measured 1.96-2.63)
-                        # while an aliased one sits in a crowd (1.17-1.66).
-                        # Being a RATIO, it also survives the overall score
-                        # drop that real optics and lighting cause, which a
-                        # raised absolute threshold would not.
+MIN_PEAK_PROMINENCE = 1.35  # best score must beat the best WELL-SEPARATED
+                        # rival by this ratio. Catches what an absolute
+                        # threshold misses: correlation always returns its
+                        # argmax, so on REPETITIVE scenery it reports a
+                        # confident, high-scoring, completely wrong peak
+                        # (measured: score 0.97 with the answer off by 8 deg).
+                        #
+                        # Was 1.8, chosen from synthetic scenes where genuine
+                        # matches scored 1.96-2.63. Real Unity renders are
+                        # much less distinctive than synthetic stripes and
+                        # measured 1.52-2.16 for CORRECT matches, so 1.8
+                        # rejected four of six valid measurements including a
+                        # 5 deg turn that missed the bar by 0.01. The three
+                        # cases this gate must still reject cluster at
+                        # 1.00-1.17, well below the real-match floor, so 1.35
+                        # sits in the gap rather than on top of either group.
+                        # See test_heading.py's gate table for the values.
+                        #
+                        # This gate does NOT have to catch everything on its
+                        # own: out-of-range matches also collapse in absolute
+                        # score (~0.45 against ~0.9 for real matches), so
+                        # MIN_CONFIDENCE covers them. Each gate handles the
+                        # failure the other cannot see.
 
 PROMINENCE_EXCLUSION = 0.05  # rivals within this fraction of the width of the
                         # peak are part of the same lobe, not competitors.

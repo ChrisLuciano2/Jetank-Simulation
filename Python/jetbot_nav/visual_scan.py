@@ -248,8 +248,9 @@ def floor_mask(frame_rgb: np.ndarray,
                sample_rows: float = 0.12,
                sample_cols: float = 0.4,
                hue_tol: int = 12,
-               sat_tol: int = 60,
-               val_tol: int = 60,
+               sat_tol: int = 70,
+               val_drop_tol: int = 130,
+               val_rise_tol: int = 60,
                ignore_bottom_rows: int = 0) -> np.ndarray:
     """
     Boolean mask of "this pixel looks like floor".
@@ -265,6 +266,24 @@ def floor_mask(frame_rgb: np.ndarray,
     the real JETANK the front of the body intrudes into the bottom of the
     frame, and sampling it would make the ROBOT the reference "floor"
     colour and mark the actual floor as an obstacle.
+
+    SHADOWS ARE THE HARD PART, and the reason the value tolerance is
+    ASYMMETRIC. A shadow scales all three channels down together: hue is
+    essentially unchanged, saturation moves a little, brightness collapses.
+    A symmetric value window therefore throws shadowed floor out of the
+    mask, the column walk stops at the shadow's leading edge, and the
+    robot reports a phantom obstacle exactly where its own shadow falls —
+    measured on a real render as a solid return at 0.97 units while the
+    range sensor saw open ground to 12. Obstacle shadows do the same
+    thing, at whatever distance the obstacle happens to be.
+
+    So darkening is tolerated generously (val_drop_tol) while brightening
+    is not (val_rise_tol). Hue carries the real discrimination: a red
+    obstacle is a different colour from green floor no matter how it is
+    lit, whereas a shadow is the same colour turned down. This does mean
+    a genuinely dark, floor-HUED obstacle can be absorbed into the floor —
+    an unavoidable trade for a colour method, and the reason
+    perception.py cannot see a red block on a red mat either.
 
     Assumes a fairly uniform floor. On patterned or heavily reflective
     surfaces, swap this function out — every other function in this
@@ -298,9 +317,15 @@ def floor_mask(frame_rgb: np.ndarray,
     hue_diff = np.abs(hsv[:, :, 0].astype(np.int16) - int(ref[0]))
     hue_diff = np.minimum(hue_diff, 180 - hue_diff)   # hue is circular
     sat_diff = np.abs(hsv[:, :, 1].astype(np.int16) - int(ref[1]))
-    val_diff = np.abs(hsv[:, :, 2].astype(np.int16) - int(ref[2]))
 
-    mask = (hue_diff <= hue_tol) & (sat_diff <= sat_tol) & (val_diff <= val_tol)
+    # Signed, not absolute: positive means DARKER than the reference floor,
+    # which is what a shadow looks like and must stay in the mask.
+    val_drop = int(ref[2]) - hsv[:, :, 2].astype(np.int16)
+
+    mask = ((hue_diff <= hue_tol)
+            & (sat_diff <= sat_tol)
+            & (val_drop <= val_drop_tol)      # not too dark to be shadow
+            & (-val_drop <= val_rise_tol))    # but not brighter than floor
     mask = mask.astype(np.uint8)
 
     # Close pinholes (specular highlights on the floor) then drop specks,

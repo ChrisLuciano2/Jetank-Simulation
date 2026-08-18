@@ -251,6 +251,52 @@ check("obstacle on the image's right -> positive bearing",
       rangle > 0, f"got {rangle:.1f} deg")
 
 
+# ─── 8b. Shadows are floor, not obstacles ───────────────────────────────────
+# The failure that showed up on the first valid Unity render: the robot's
+# own shadow fell in the lower-left of the frame and came back as a solid
+# obstacle at 0.97 units while the range sensor saw open ground to 12.
+# A shadow scales all channels down together — same hue, much lower value —
+# so a symmetric value tolerance ejects shadowed floor from the mask and
+# the column walk stops at the shadow's leading edge.
+
+shadowed = make_floor_frame(scan_geom)
+# Darken a wedge of floor the way a cast shadow does: multiply, not
+# subtract, since that is what losing a light source actually does.
+shadowed[300:, :220] = (shadowed[300:, :220] * 0.45).astype(np.uint8)
+
+shadow_mask = floor_mask(shadowed)
+shadow_scan = free_space_scan(shadowed, scan_geom, n_rays=13, max_range=12.0)
+
+check("shadowed floor still segments as floor",
+      bool(shadow_mask[400, 100]),
+      "the shadowed region was classified as non-floor")
+check("a cast shadow does not become a phantom obstacle",
+      all(d >= 12.0 for d in shadow_scan["distances"]),
+      f"nearest reading {min(shadow_scan['distances']):.2f} "
+      f"(expected all clear)")
+
+# The trade has a limit, and it must be the RIGHT limit: a real obstacle
+# is a different HUE, so it stays visible however the value tolerance is
+# widened. If this ever fails alongside the check above passing, the mask
+# has been loosened into uselessness rather than made shadow-tolerant.
+shadow_and_block = make_floor_frame(scan_geom)
+shadow_and_block[300:, :220] = (shadow_and_block[300:, :220] * 0.45).astype(np.uint8)
+shadow_and_block[:base_row, 280:360] = (200, 40, 40)
+sb_scan = free_space_scan(shadow_and_block, scan_geom, n_rays=13, max_range=12.0)
+check("a real obstacle is still detected in the presence of shadows",
+      close(min(sb_scan["distances"]), expected, 0.05),
+      f"got {min(sb_scan['distances']):.3f}, expected {expected:.3f}")
+
+# A DARK obstacle of a different hue must also survive the wider value
+# window — this is the case most at risk from tolerating shadows.
+dark_block = make_floor_frame(scan_geom)
+dark_block[:base_row, 280:360] = (70, 15, 15)      # dim red
+db_scan = free_space_scan(dark_block, scan_geom, n_rays=13, max_range=12.0)
+check("a dark but differently-hued obstacle is still detected",
+      close(min(db_scan["distances"]), expected, 0.05),
+      f"got {min(db_scan['distances']):.3f}, expected {expected:.3f}")
+
+
 # ─── 9. Mismatched frame size is rejected, not silently skewed ──────────────
 # Feeding a differently-sized frame would shift every bearing without any
 # visible symptom, which is the worst possible failure mode here.

@@ -332,12 +332,19 @@ if sig is not None:
 
 if SAVE:
     import cv2
+    # The RAW frame matters most: with it, segmentation and heading can be
+    # iterated on offline against real pixels instead of costing a full
+    # Unity round trip per attempt. The annotated versions are for looking
+    # at; this one is for working with.
+    cv2.imwrite("validate_raw.png", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+    cv2.imwrite("validate_mask.png", (mask * 255).astype(np.uint8))
     vis = visual_scan.annotate(frame, geom, scan, mask=mask)
     cv2.imwrite("validate_scan.png", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
     band_img = frame.copy()
     band_img[top:bottom, :, 1] = 255      # tint the heading band green
     cv2.imwrite("validate_band.png", cv2.cvtColor(band_img, cv2.COLOR_RGB2BGR))
-    print("\nwrote validate_scan.png and validate_band.png")
+    print("\nwrote validate_raw.png (raw frame, for offline iteration), "
+          "validate_mask.png, validate_scan.png, validate_band.png")
 
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
