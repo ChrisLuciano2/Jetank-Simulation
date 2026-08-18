@@ -52,9 +52,30 @@ USAGE
     from jetbot_nav import gap_follow
     gap_follow.drive_with_gap_following(duration=20.0)
 
+TUNED FOR THE CAMERA, NOT THE OLD FAN
+─────────────────────────────────────
+The scan now comes from jetbot_nav.visual_scan (the JETANK has a camera
+and no range sensor), which is narrower than the 120-deg fan this module
+was originally written against and blind inside ~0.8 units. Two constants
+carry the consequences:
+
+  - CORRIDOR_HALF dropped 2.0 -> 1.7. At 2.0 a 4-unit doorway put both
+    edges exactly on the blocking threshold, and without peripheral
+    vision there is no early view of the far edge to centre against.
+  - MIN_GAP_DEG replaced a raw MIN_GAP_RAYS count, which meant a
+    different physical opening on every sensor.
+
+The near blind zone is currently safe only because EMERGENCY_FORWARD
+(1.6) sits outside it — the robot stops before anything can vanish
+underneath the camera. Re-check that relationship before changing either
+the mounting or EMERGENCY_FORWARD; test_visual_scan.py prints the
+comparison on every run.
+
 TROUBLESHOOTING
     - Logic regressions:  py test_gap_logic.py   (offline, closed-loop 2D
       simulator — includes both field-reported failure geometries)
+    - Camera-model runs:  py test_camera_nav.py  (same scenarios, but
+      through the narrow FOV and blind zone the real sensor has)
     - Record a live run:  gap_follow.drive_with_gap_following(20, log_path="run.csv")
     - Replay it offline:  gap_follow.replay_log("run.csv")
 """
@@ -74,9 +95,30 @@ DEFAULT_MAX_RANGE = 12.0
 
 # ─── Tuning constants ────────────────────────────────────────────────────────
 
-CORRIDOR_HALF     = 2    # robot half-width (0.85) + margin: obstacles whose
+CORRIDOR_HALF     = 1.7  # robot half-width (0.85) + margin: obstacles whose
                            # lateral offset exceeds this are BESIDE us, not in
-                           # our way, no matter how close their ray reads
+                           # our way, no matter how close their ray reads.
+                           #
+                           # Was 2.0, which demanded a 4.0-wide clear corridor
+                           # from a 1.7-wide robot. A 4-unit doorway therefore
+                           # put BOTH its edges at lateral exactly 2.0 -- on
+                           # the blocking threshold by construction -- so any
+                           # approach even slightly off-centre read the near
+                           # edge as an in-corridor obstacle and recovered
+                           # instead of threading. The 120-deg fan hid this:
+                           # it could see both edges early enough to centre up
+                           # first. The camera sees ~75 deg, so the far edge is
+                           # outside the frame during the approach and there is
+                           # no centring evidence to act on.
+                           #
+                           # 1.7 is "half a robot-width of margin per side",
+                           # and is the LARGEST value that passes both the
+                           # camera and lidar suites -- lower values (1.5 and
+                           # below) start failing the lidar doorway instead.
+                           # Verified across start offsets -1.0..+1.0; beyond
+                           # that the robot physically overlaps the doorway
+                           # frame and correctly routes around rather than
+                           # forcing it.
 STOP_FORWARD      = 3    # forward-corridor clearance below this -> BACKUP
                            # (was 2.4 -- run6/run7/run8 field reports all
                            # showed a pattern of getting close, backing off
@@ -97,7 +139,26 @@ EMERGENCY_FORWARD = 1.6    # hard floor: triggers BACKUP even mid-SEARCH
 SLOW_FORWARD      = 6.0    # speed scales down from here toward STOP_FORWARD
 
 GAP_THRESHOLD     = 4.5    # a ray is "free" if it reads at least this far
-MIN_GAP_RAYS      = 3      # a gap must span this many consecutive free rays
+
+MIN_GAP_DEG       = 30.0   # a gap must subtend at least this ANGLE to count.
+                           # Was a raw ray count (3), which silently means a
+                           # different physical gap on every sensor: 3 rays is
+                           # 30 deg on the old 13-ray/120-deg fan but only
+                           # 18.8 deg on the 13-ray/75-deg camera scan, so
+                           # swapping the sensor quietly halved the minimum
+                           # opening the robot would attempt to drive through.
+                           # An angle is sensor-independent; the ray count is
+                           # derived per-controller in __init__.
+MIN_GAP_RAYS_FLOOR = 2     # never accept a "gap" of a single ray, however
+                           # coarse the scan — one ray is a hole in the data,
+                           # not evidence of a traversable opening.
+
+# Sign-switch debounce, shared with target_seek's overridden _choose_gap.
+# These were local variables duplicated in both implementations; a test
+# hardcoded "5" against a debounce of 6 and read as a controller bug for a
+# long time. Module scope so there is exactly one source of truth.
+SIGN_SWITCH_MARGIN_DEG     = 20.0
+SIGN_SWITCH_DEBOUNCE_TICKS = 6
 
 TURN_GAIN         = 1.6    # steering strength per radian of target angle
 MIN_TURN_DIFF     = 0.24   # minimum wheel differential of any commanded turn
@@ -242,6 +303,18 @@ class GapFollowController:
         self.angles_deg = list(angles_deg)
         self.angles_rad = [math.radians(a) for a in self.angles_deg]
         self.max_range = float(max_range or DEFAULT_MAX_RANGE)
+
+        # Convert MIN_GAP_DEG into a ray count for THIS scan's resolution,
+        # so the minimum opening stays a fixed angle whatever sensor is
+        # feeding us (13 rays over 120 deg and over 75 deg are different
+        # instruments). Ceil, so a gap is never accepted below the angle.
+        if len(self.angles_deg) >= 2:
+            step = abs(self.angles_deg[1] - self.angles_deg[0])
+        else:
+            step = MIN_GAP_DEG
+        self.min_gap_rays = max(MIN_GAP_RAYS_FLOOR,
+                                int(math.ceil(MIN_GAP_DEG / step)) if step else
+                                MIN_GAP_RAYS_FLOOR)
 
         if GAP_THRESHOLD >= self.max_range:
             raise ValueError(
@@ -424,7 +497,7 @@ class GapFollowController:
                 run_start = i
             if (not free or i == len(d) - 1) and run_start is not None:
                 run_end = i if free else i - 1
-                if run_end - run_start + 1 >= MIN_GAP_RAYS:
+                if run_end - run_start + 1 >= self.min_gap_rays:
                     lo, hi = self.angles_deg[run_start], self.angles_deg[run_end]
                     gaps.append({
                         "lo_deg": lo, "hi_deg": hi,
@@ -464,9 +537,6 @@ class GapFollowController:
         commitment on one noisy tick). So the margin condition also has to
         hold for SIGN_SWITCH_DEBOUNCE_TICKS in a row before it's trusted —
         same debounce principle as the PIVOT/SEARCH exit checks."""
-        SIGN_SWITCH_MARGIN_DEG = 20.0
-        SIGN_SWITCH_DEBOUNCE_TICKS = 6
-
         committed = 0
         if self._target_deg is not None and abs(self._target_deg) >= 5:
             committed = 1 if self._target_deg > 0 else -1

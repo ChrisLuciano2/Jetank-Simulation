@@ -83,6 +83,7 @@ from jetbot_nav.gap_follow import (
     GapFollowController,
     FORWARD, SEARCH, BACKUP, PIVOT,
     STOP_FORWARD, FULL_CLEAR_FRACTION,
+    SIGN_SWITCH_MARGIN_DEG, SIGN_SWITCH_DEBOUNCE_TICKS,
 )
 
 # ─── Tuning constants ────────────────────────────────────────────────────────
@@ -272,8 +273,6 @@ class SeekingGapFollowController(GapFollowController):
         if self._target_bearing_deg is None:
             return super()._choose_gap(gaps)
 
-        SIGN_SWITCH_MARGIN_DEG = 20.0
-        SIGN_SWITCH_DEBOUNCE_TICKS = 6
         bearing = self._target_bearing_deg
 
         def rank(g):

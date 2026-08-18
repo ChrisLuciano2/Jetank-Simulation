@@ -253,12 +253,18 @@ Both suites are fully offline — no Unity, no hardware:
 py -3.8 test_gap_logic.py
 ```
 
-`test_gap_logic.py` is a closed-loop test: it contains a miniature 2D simulator with
-real raycasting and differential-drive kinematics, so the controller's steering
-changes what it senses next. `test_target_seek.py` covers the seeking layer.
-`test_visual_scan.py` pins the camera projection against hand-computed distances —
-a segmentation bug is loud, but a projection bug returns plausible numbers that are
-uniformly wrong. Recorded field failures replay from `test_data/`.
+| Suite | Covers |
+|-------|--------|
+| `test_gap_logic.py` | Closed-loop: a miniature 2D simulator with real raycasting and differential-drive kinematics, so the controller's steering changes what it senses next. Recorded field failures replay from `test_data/`. |
+| `test_camera_nav.py` | The **same** scenarios re-run through the camera's narrow FOV and near blind zone, so the cost of real sensing is measured rather than assumed. |
+| `test_visual_scan.py` | Camera projection, pinned against hand-computed distances — a segmentation bug is loud, but a projection bug returns plausible numbers that are uniformly wrong. |
+| `test_target_seek.py` | The colour-seeking layer on top of gap-following. |
+
+`gap_follow` is tuned for the camera rather than the original 120° fan. `CORRIDOR_HALF`
+is 1.7 (at 2.0, a 4-unit doorway put both edges exactly on the blocking threshold, and
+without peripheral vision there's no early view of the far edge to centre against), and
+the minimum gap is an **angle** (`MIN_GAP_DEG`) rather than a ray count, since a fixed
+count means a different physical opening on every sensor.
 
 Live tests, with Unity playing:
 

@@ -32,6 +32,7 @@ import sys
 
 from jetbot_nav.gap_follow import (
     GapFollowController, SCAN_FOV_DEG, SCAN_RAY_COUNT,
+    SIGN_SWITCH_DEBOUNCE_TICKS,
 )
 
 # ─── Mini 2D world ───────────────────────────────────────────────────────────
@@ -57,6 +58,56 @@ YAW_FRICTION   = 0.08   # skid-steer: wheel differential below this produces
 
 VERBOSE = "-v" in sys.argv
 _results = []
+
+
+# ─── Sensor model ────────────────────────────────────────────────────────────
+# What the robot is allowed to perceive. Originally this was implicit and
+# ideal: 13 rays over 120 deg, every one exact, nothing hidden. That is a
+# 2D lidar, and the JETANK does not have one — the scan now comes from the
+# camera via jetbot_nav.visual_scan, which is narrower AND has a near
+# blind zone. Making the model explicit lets the SAME scenarios run under
+# both, so the cost of the real sensor is measurable rather than asserted.
+
+class SensorModel:
+    """
+    fov_deg / ray_count define the scan geometry. min_range is the killer:
+    a camera derives distance from where an object's base occludes the
+    floor, so anything nearer than the bottom row of the frame can see is
+    not merely unmeasured — it reads as OPEN FLOOR. There is no "too
+    close" reading to react to, which is a failure mode a range sensor
+    simply does not have.
+    """
+
+    def __init__(self, name, fov_deg, ray_count, min_range=0.0):
+        self.name = name
+        self.fov_deg = fov_deg
+        self.ray_count = ray_count
+        self.min_range = min_range
+
+    def angles(self):
+        step = self.fov_deg / (self.ray_count - 1)
+        return [-self.fov_deg / 2 + i * step for i in range(self.ray_count)]
+
+    def observe(self, true_dist):
+        if true_dist < self.min_range:
+            return MAX_RANGE          # inside the blind zone: looks clear
+        return min(true_dist, MAX_RANGE)
+
+
+LIDAR = SensorModel("lidar", SCAN_FOV_DEG, SCAN_RAY_COUNT, min_range=0.0)
+
+# Matches jetbot_nav.visual_scan.sim_jetank(): ~75 deg of GROUND fov (an
+# IMX219's 62.2 deg lens fans wider on the ground once tilted down) and a
+# ~0.82-unit blind zone at the mounted height and tilt.
+CAMERA = SensorModel("camera", 75.0, SCAN_RAY_COUNT, min_range=0.82)
+
+SENSOR = LIDAR      # test_camera_nav.py swaps this before running scenarios
+
+
+def make_controller(**kwargs):
+    """Controller wired to whatever SENSOR is active."""
+    return GapFollowController(angles_deg=SENSOR.angles(),
+                               max_range=MAX_RANGE, **kwargs)
 
 
 def _ray_segment(ox, oz, dx, dz, ax, az, bx, bz):
@@ -85,9 +136,8 @@ class MiniSim:
     def __init__(self, segments, x=0.0, z=0.0, h=0.0):
         self.segments = segments
         self.x, self.z, self.h = x, z, h
-        step = SCAN_FOV_DEG / (SCAN_RAY_COUNT - 1)
-        self.angles_deg = [-SCAN_FOV_DEG / 2 + i * step
-                           for i in range(SCAN_RAY_COUNT)]
+        self.sensor = SENSOR
+        self.angles_deg = self.sensor.angles()
         self.collided = False
         self.history = []   # (x, z, h, motors, state)
         self._wl = 0.0      # actual (lagged) wheel speeds
@@ -103,7 +153,7 @@ class MiniSim:
                 t = _ray_segment(self.x, self.z, dx, dz, ax, az, bx, bz)
                 if t is not None and t < best:
                     best = t
-            out.append(best)
+            out.append(self.sensor.observe(best))
         return out
 
     def run(self, controller, seconds):
@@ -174,7 +224,7 @@ def scenario_wall_parallel():
     # (+x direction, heading 90 deg). Only wall-side rays touch it.
     segs = [wall(-5, 1.9, 60, 1.9)]
     sim = MiniSim(segs, x=0, z=0, h=math.radians(90))
-    ctrl = GapFollowController(max_range=MAX_RANGE)
+    ctrl = make_controller()
     sim.run(ctrl, seconds=25)
 
     check("wall parallel: no collision", not sim.collided, sim)
@@ -190,7 +240,7 @@ def scenario_wall_parallel():
 def scenario_wall_head_on():
     segs = [wall(-25, 12, 25, 12)]
     sim = MiniSim(segs, x=0, z=0, h=0.0)
-    ctrl = GapFollowController(max_range=MAX_RANGE)
+    ctrl = make_controller()
     sim.run(ctrl, seconds=35)
 
     check("head-on wall: no collision", not sim.collided, sim)
@@ -215,7 +265,7 @@ def scenario_thin_pole():
         wall(px - hw, pz + hw, px - hw, pz - hw),
     ]
     sim = MiniSim(segs, x=0, z=0, h=0.0)
-    ctrl = GapFollowController(max_range=MAX_RANGE)
+    ctrl = make_controller()
     sim.run(ctrl, seconds=25)
 
     check("thin pole: no collision (was: ram, back up, ram again)",
@@ -233,7 +283,7 @@ def scenario_dead_end():
         wall(6, 2, 6, 12),       # right wall
     ]
     sim = MiniSim(segs, x=0, z=5, h=0.0)   # already inside, facing the back
-    ctrl = GapFollowController(max_range=MAX_RANGE)
+    ctrl = make_controller()
     sim.run(ctrl, seconds=60)
 
     check("dead end: no collision", not sim.collided, sim)
@@ -249,7 +299,7 @@ def scenario_doorway():
         wall(2, 10, 25, 10),
     ]
     sim = MiniSim(segs, x=-1.0, z=0, h=0.0)   # slightly off the opening axis
-    ctrl = GapFollowController(max_range=MAX_RANGE)
+    ctrl = make_controller()
     sim.run(ctrl, seconds=30)
 
     check("doorway: no collision", not sim.collided, sim)
@@ -261,7 +311,7 @@ def scenario_doorway():
 
 def scenario_open_field():
     sim = MiniSim([], x=0, z=0, h=0.0)
-    ctrl = GapFollowController(max_range=MAX_RANGE)
+    ctrl = make_controller()
     sim.run(ctrl, seconds=10)
 
     drifted = abs(sim.x)
@@ -286,7 +336,7 @@ def scenario_single_cube():
 
     for ox in (0.0, 0.3, 0.6):
         sim = MiniSim(cube(ox, 9, 1.0), x=0, z=0, h=0.0)
-        ctrl = GapFollowController(max_range=MAX_RANGE)
+        ctrl = make_controller()
         sim.run(ctrl, seconds=30)
 
         states = [s for (_, _, _, _, s) in sim.history]
@@ -395,10 +445,17 @@ def scenario_prefers_much_better_off_side_gap():
 
     gaps = ctrl._find_gaps(d)
     # The sign switch is debounced (see run5 field bug) -- it must SUSTAIN
-    # across several ticks before the controller trusts it, so call it
-    # repeatedly with the same scan, as a real multi-tick approach would.
+    # for SIGN_SWITCH_DEBOUNCE_TICKS in a row before the controller trusts
+    # it, so call it repeatedly with the same scan as a real multi-tick
+    # approach would.
+    #
+    # This loop used to run a hardcoded 5 times against a debounce of 6, so
+    # it asserted the switch had happened exactly one tick before the
+    # controller was ever going to make it. That read as a controller
+    # defect for a long time; it was not. Derive the count from the
+    # constant so the two cannot drift apart again.
     choice = None
-    for _ in range(5):
+    for _ in range(SIGN_SWITCH_DEBOUNCE_TICKS):
         choice = ctrl._choose_gap(gaps)
     check("switches to a dramatically better off-side gap instead of a "
           "distant on-side one (was: doorway ignored in favor of empty "
@@ -493,6 +550,45 @@ def scenario_pivot_search_speeds_independent():
                         f"search={search_l} (want {gf.SEARCH_SPEED})")
 
 
+# ─── Scenario L: the minimum gap is an ANGLE, not a ray count ───────────────
+# MIN_GAP_RAYS used to be a literal 3, which silently means a different
+# physical opening on every sensor: 30 deg on the 13-ray/120-deg fan but
+# 18.8 deg on the 13-ray/75-deg camera scan. Swapping to the camera
+# therefore halved the narrowest gap the robot would attempt, with nothing
+# anywhere saying so. Pin the invariant instead of the ray count.
+
+def scenario_min_gap_is_sensor_independent():
+    from jetbot_nav.gap_follow import GapFollowController, MIN_GAP_DEG
+
+    def rays_for(fov, n):
+        step = fov / (n - 1)
+        ctrl = GapFollowController(
+            angles_deg=[-fov / 2 + i * step for i in range(n)], max_range=12.0)
+        return ctrl.min_gap_rays, ctrl.min_gap_rays * step
+
+    configs = [(120.0, 13), (75.0, 13), (62.2, 13), (90.0, 7), (75.0, 25)]
+    spans = [rays_for(f, n)[1] for f, n in configs]
+
+    check("minimum gap stays ~MIN_GAP_DEG across every scan resolution",
+          all(MIN_GAP_DEG <= s < MIN_GAP_DEG + 10 for s in spans), None,
+          detail=f"spans={[round(s, 1) for s in spans]}")
+
+    # Never round down: accepting a gap narrower than MIN_GAP_DEG is the
+    # failure mode that matters (driving at an opening too tight to fit).
+    check("derived ray count never rounds the gap below MIN_GAP_DEG",
+          all(s >= MIN_GAP_DEG for s in spans), None,
+          detail=f"spans={[round(s, 1) for s in spans]}")
+
+    # A single free ray is a hole in the data, not an opening.
+    coarse_rays, _ = rays_for(180.0, 3)     # 90 deg per ray
+    check("a very coarse scan still needs more than one free ray",
+          coarse_rays >= 2, None, detail=f"got {coarse_rays}")
+
+    check("the legacy 120-deg fan keeps its original 3-ray behaviour",
+          rays_for(120.0, 13)[0] == 3, None,
+          detail=f"got {rays_for(120.0, 13)[0]}")
+
+
 # ─── Run all ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -509,6 +605,7 @@ if __name__ == "__main__":
     scenario_single_tick_clear_blip_ignored()
     scenario_multi_tick_clear_blip_ignored()
     scenario_pivot_search_speeds_independent()
+    scenario_min_gap_is_sensor_independent()
 
     passed = sum(_results)
     print(f"\n{passed}/{len(_results)} checks passed")
