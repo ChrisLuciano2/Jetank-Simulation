@@ -234,6 +234,64 @@ if have_truth:
              "Nothing in view is both visible and within range. Drive toward "
              "an obstacle and re-run — this check proves nothing as it stands.")
 
+    # ── Height calibration ───────────────────────────────────────────────
+    # Distance is height / tan(depression), so a wrong mounting height
+    # scales EVERY reading by a constant factor while leaving the picture
+    # looking entirely reasonable. The horizon check above cannot catch it:
+    # horizon_row() depends only on tilt. So solve for the height that
+    # would reconcile the rays where both sensors see the same object, and
+    # compare it against what CameraGeometry was told.
+    #
+    # A uniform ratio across independent rays means height. A scattered
+    # one means something else (a ray pair that is not actually looking at
+    # the same object, or non-flat ground).
+
+    # Matches SceneSetup.CamForward: the camera sits this far ahead of the
+    # robot origin, where ProximitySensor's rays start, so it is closer to
+    # anything in front by roughly this much.
+    SIM_CAM_FORWARD = 0.80
+
+    implied = []
+    for a, d in zip(scan["angles_deg"], scan["distances"]):
+        if d >= scan["max_range"] - 0.01:
+            continue
+        gt = truth_at(a)
+        if gt is None or gt >= float(truth["max_range"]) - 0.01:
+            continue
+        if gt < geom.min_visible_range():
+            continue
+        gt_from_camera = gt - SIM_CAM_FORWARD * math.cos(math.radians(a))
+        if gt_from_camera <= 0:
+            continue
+        implied.append((a, d, gt, geom.height_m * gt_from_camera / d))
+
+    if len(implied) >= 2:
+        print()
+        print("  height calibration (distance scales linearly with height):")
+        for a, d, gt, h in implied:
+            print(f"    bearing {a:+6.1f}  visual {d:5.2f}  truth {gt:5.2f}"
+                  f"   -> implied height {h:.3f}")
+        hs = sorted(h for _, _, _, h in implied)
+        median_h = hs[len(hs) // 2]
+        spread = (max(hs) - min(hs)) / median_h
+
+        if spread > 0.25:
+            warn("implied heights disagree across rays",
+                 f"spread {spread * 100:.0f}% around {median_h:.2f}. Rays are "
+                 "probably not all seeing the same objects — a thin obstacle "
+                 "that falls between the range sensor's beams will do this. "
+                 "Trust the clustered values, not the outliers.")
+        else:
+            off_by = abs(median_h - geom.height_m) / geom.height_m
+            check("configured camera height matches what the geometry implies",
+                  off_by < 0.15,
+                  f"configured {geom.height_m:.2f}, implied {median_h:.2f} "
+                  f"({off_by * 100:.0f}% off across {len(hs)} rays). Every "
+                  f"distance is scaled by this. Read RobotCamera's WORLD Y in "
+                  f"the Unity Inspector and set visual_scan.sim_jetank() to "
+                  f"match — do not just paste the implied number, since a "
+                  f"wrong tilt can masquerade as a wrong height.")
+
 
 # ─── 4. Heading: is there anything to lock onto? ─────────────────────────────
 

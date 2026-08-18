@@ -248,6 +248,8 @@ def floor_mask(frame_rgb: np.ndarray,
                sample_rows: float = 0.12,
                sample_cols: float = 0.4,
                hue_tol: int = 12,
+               shadow_hue_tol: int = 35,
+               shadow_val_drop: int = 25,
                sat_tol: int = 70,
                val_drop_tol: int = 130,
                val_rise_tol: int = 60,
@@ -267,23 +269,36 @@ def floor_mask(frame_rgb: np.ndarray,
     frame, and sampling it would make the ROBOT the reference "floor"
     colour and mark the actual floor as an obstacle.
 
-    SHADOWS ARE THE HARD PART, and the reason the value tolerance is
-    ASYMMETRIC. A shadow scales all three channels down together: hue is
-    essentially unchanged, saturation moves a little, brightness collapses.
-    A symmetric value window therefore throws shadowed floor out of the
-    mask, the column walk stops at the shadow's leading edge, and the
-    robot reports a phantom obstacle exactly where its own shadow falls —
-    measured on a real render as a solid return at 0.97 units while the
-    range sensor saw open ground to 12. Obstacle shadows do the same
-    thing, at whatever distance the obstacle happens to be.
+    SHADOWS ARE THE HARD PART. Left unhandled they become phantom
+    obstacles: the shadowed floor drops out of the mask, the column walk
+    stops at the shadow's leading edge, and the robot reports something
+    solid exactly where its own shadow falls — measured on a real render
+    as a 0.97-unit return while the range sensor saw open ground to 12.
+    Obstacle shadows do the same at whatever distance the obstacle is.
 
-    So darkening is tolerated generously (val_drop_tol) while brightening
-    is not (val_rise_tol). Hue carries the real discrimination: a red
-    obstacle is a different colour from green floor no matter how it is
-    lit, whereas a shadow is the same colour turned down. This does mean
-    a genuinely dark, floor-HUED obstacle can be absorbed into the floor —
-    an unavoidable trade for a colour method, and the reason
-    perception.py cannot see a red block on a red mat either.
+    A shadow is NOT simply the floor colour turned down. It is lit by a
+    different light source — ambient sky rather than the sun — so its hue
+    shifts as well. On the real renders here the floor sits at hue 56 and
+    its shadows at 84-85, a hue distance of ~28, which sails past any
+    tolerance tight enough to reject an actual obstacle. Widening the hue
+    tolerance globally to cover that would also swallow real objects, so
+    the extra latitude is granted ONLY to pixels that are also darker than
+    the floor, which is what makes something a shadow rather than a
+    differently-coloured thing sitting in the light.
+
+    The two populations separate cleanly enough to tune against. Measured
+    over the excluded pixels of a real frame:
+
+        darker than floor (shadows):   hue distance ~17-43, median 28
+        not darker (obstacles, sky):   hue distance ~24-58, median 56
+
+    Hence shadow_hue_tol 35 for darkened pixels and hue_tol 12 otherwise;
+    35 sits on a plateau, with 40 giving identical results.
+
+    The residual trade is that a genuinely dark, floor-HUED obstacle can
+    be absorbed into the floor. That is unavoidable for a colour method
+    and is the same limitation that stops perception.py seeing a red block
+    on a red mat.
 
     Assumes a fairly uniform floor. On patterned or heavily reflective
     surfaces, swap this function out — every other function in this
@@ -322,7 +337,12 @@ def floor_mask(frame_rgb: np.ndarray,
     # which is what a shadow looks like and must stay in the mask.
     val_drop = int(ref[2]) - hsv[:, :, 2].astype(np.int16)
 
-    mask = ((hue_diff <= hue_tol)
+    # Only darkened pixels get the wider hue latitude. A bright pixel that
+    # is off-hue is an object, not a shadow.
+    shadowy = val_drop > shadow_val_drop
+    hue_ok = (hue_diff <= hue_tol) | (shadowy & (hue_diff <= shadow_hue_tol))
+
+    mask = (hue_ok
             & (sat_diff <= sat_tol)
             & (val_drop <= val_drop_tol)      # not too dark to be shadow
             & (-val_drop <= val_rise_tol))    # but not brighter than floor

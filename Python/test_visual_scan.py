@@ -160,7 +160,18 @@ for bad_kwargs, why in [
 
 # ─── 5. Synthetic frame: empty floor reads fully clear ──────────────────────
 
-def make_floor_frame(geom, floor_rgb=(120, 120, 120), sky_rgb=(30, 30, 60)):
+# Colours measured off a real Unity render (validate_raw.png) rather than
+# invented. Using invented ones is how the first shadow test came to pass
+# against a fix that did not work: a grey floor darkened toward blue
+# produces a hue distance of ~60, while the actual scene shifts by ~28,
+# so the synthetic case was harder than reality in the one dimension that
+# mattered and easier in every other.
+FLOOR_RGB = (100, 149, 93)     # HSV (56,  96, 149) — lit grass
+SHADOW_RGB = (35, 66, 60)      # HSV (84, 120,  66) — the same grass shadowed:
+                               # 28 hue away, 24 saturation away, 83 darker
+
+
+def make_floor_frame(geom, floor_rgb=FLOOR_RGB, sky_rgb=(30, 30, 60)):
     """Uniform floor below the horizon, distinct background above it."""
     frame = np.zeros((geom.height, geom.width, 3), dtype=np.uint8)
     horizon = int(max(0, min(geom.height, geom.horizon_row())))
@@ -259,10 +270,21 @@ check("obstacle on the image's right -> positive bearing",
 # so a symmetric value tolerance ejects shadowed floor from the mask and
 # the column walk stops at the shadow's leading edge.
 
-shadowed = make_floor_frame(scan_geom)
-# Darken a wedge of floor the way a cast shadow does: multiply, not
-# subtract, since that is what losing a light source actually does.
-shadowed[300:, :220] = (shadowed[300:, :220] * 0.45).astype(np.uint8)
+def cast_shadow(frame, rows, cols):
+    """
+    Replace a region with the measured shadowed-floor colour.
+
+    A shadow is not the floor colour turned down: it loses the direct
+    light and is left lit by ambient sky, so it shifts hue as well as
+    darkening. That hue shift is what actually defeated the mask on real
+    renders, and a brightness-only model of it would let a broken fix pass
+    this test.
+    """
+    frame[rows, cols] = SHADOW_RGB
+    return frame
+
+
+shadowed = cast_shadow(make_floor_frame(scan_geom), slice(300, None), slice(0, 220))
 
 shadow_mask = floor_mask(shadowed)
 shadow_scan = free_space_scan(shadowed, scan_geom, n_rays=13, max_range=12.0)
@@ -279,8 +301,8 @@ check("a cast shadow does not become a phantom obstacle",
 # is a different HUE, so it stays visible however the value tolerance is
 # widened. If this ever fails alongside the check above passing, the mask
 # has been loosened into uselessness rather than made shadow-tolerant.
-shadow_and_block = make_floor_frame(scan_geom)
-shadow_and_block[300:, :220] = (shadow_and_block[300:, :220] * 0.45).astype(np.uint8)
+shadow_and_block = cast_shadow(make_floor_frame(scan_geom),
+                               slice(300, None), slice(0, 220))
 shadow_and_block[:base_row, 280:360] = (200, 40, 40)
 sb_scan = free_space_scan(shadow_and_block, scan_geom, n_rays=13, max_range=12.0)
 check("a real obstacle is still detected in the presence of shadows",
