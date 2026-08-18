@@ -106,6 +106,58 @@ check("frame has real image content (not black or a flat fill)",
       spread > 8.0, f"pixel std {spread:.1f}")
 
 
+# ─── 1b. Is this actually the robot's camera? ────────────────────────────────
+# Everything downstream converts pixels to metres using CameraGeometry, so
+# a frame from a DIFFERENT camera produces a full page of confident,
+# meaningless numbers rather than an error. That is not hypothetical: the
+# first run of this harness measured the world-fixed overview camera,
+# because SimCamera had not yet been moved onto RobotCamera, and reported
+# the robot's own chassis as an obstacle 1.0 units ahead.
+#
+# The sky/ground boundary is a strong horizontal edge, so its row can be
+# recovered and compared against the row the geometry predicts. They only
+# agree when the frame really does come from a camera mounted and aimed
+# the way CameraGeometry says.
+
+def detect_horizon_row(img):
+    """Row of the strongest horizontal edge, i.e. the sky/ground boundary."""
+    lum = (0.299 * img[:, :, 0] + 0.587 * img[:, :, 1]
+           + 0.114 * img[:, :, 2]).astype(np.float32)
+    profile = lum.mean(axis=1)
+    grad = np.abs(np.diff(profile))
+    if grad.size == 0 or float(grad.max()) < 1.0:
+        return None                       # no clear boundary in view
+    return int(np.argmax(grad))
+
+
+predicted = geom.horizon_row()
+observed = detect_horizon_row(frame)
+
+if observed is None:
+    warn("no clear horizon in view, cannot confirm which camera this is",
+         "Point the robot somewhere the sky/ground boundary is visible if the "
+         "numbers below look wrong.")
+else:
+    agree = abs(observed - predicted) <= 40
+    check("the frame comes from a camera matching CameraGeometry",
+          agree,
+          f"horizon observed at row {observed}, geometry predicts "
+          f"{predicted:.0f}"
+          + ("" if agree else
+             "\n        This frame is NOT from the robot-mounted camera. Run "
+             "Tools > Setup Robot Simulator Scene in Unity to create "
+             "RobotCamera\n        and move SimCamera onto it, then re-run. "
+             "Every distance and heading below is measured against the wrong "
+             "optics until you do."))
+    if not agree:
+        print("\nSkipping the remaining checks — they would only produce "
+              "confident nonsense against the wrong camera.")
+        sim_client.disconnect()
+        passed = sum(_results)
+        print(f"\n{passed}/{len(_results)} checks passed (stopped early)")
+        sys.exit(1)
+
+
 # ─── 2. Floor segmentation ───────────────────────────────────────────────────
 
 mask = visual_scan.floor_mask(frame)
@@ -220,16 +272,44 @@ if sig is not None:
     check("CourseLock arms on a real frame", armed)
 
     if armed:
-        print("     commanded |  measured | error")
+        # Raw score/prominence alongside the verdict. A bare "None" cannot
+        # distinguish "nothing to correlate" from "rejected by a gate that
+        # is too strict for this scene", and those need opposite fixes —
+        # one is scene-side, the other is a threshold.
+        from jetbot_nav.heading import (
+            _best_shift, MIN_CONFIDENCE, MIN_PEAK_PROMINENCE,
+            MAX_SHIFT_FRACTION,
+        )
+        ref_sig = heading.column_signature(base, geom)
+        dpb = heading.degrees_per_bin(geom, W)
+        max_shift = int(W * MAX_SHIFT_FRACTION)
+
+        print("     commanded |  measured | error  |  score  promin  gate")
         rot_err = []
         for truth_deg in [-20.0, -10.0, -5.0, 5.0, 10.0, 20.0]:
             f = face(truth_deg)
             est = lock.error_deg(f) if f is not None else None
+
+            live_sig = heading.column_signature(f, geom) if f is not None else None
+            if live_sig is None:
+                score = prom = float("nan")
+                gate = "no signature"
+            else:
+                _, score, prom = _best_shift(ref_sig, live_sig, max_shift)
+                if score < MIN_CONFIDENCE:
+                    gate = "score"
+                elif prom < MIN_PEAK_PROMINENCE:
+                    gate = "PROMINENCE"
+                else:
+                    gate = "ok"
+
             if est is None:
-                print(f"      {truth_deg:+8.1f} |    (none) |")
+                print(f"      {truth_deg:+8.1f} |    (none) |        | "
+                      f"{score:6.3f}  {prom:6.2f}  {gate}")
                 rot_err.append(None)
             else:
-                print(f"      {truth_deg:+8.1f} | {est:+9.2f} | {est - truth_deg:+6.2f}")
+                print(f"      {truth_deg:+8.1f} | {est:+9.2f} | "
+                      f"{est - truth_deg:+6.2f} | {score:6.3f}  {prom:6.2f}  {gate}")
                 rot_err.append(est - truth_deg)
 
         good = [e for e in rot_err if e is not None]
