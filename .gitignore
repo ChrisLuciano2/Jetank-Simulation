@@ -71,5 +71,8 @@ ENV/
 # Scratch telemetry from live drives. Recordings kept as regression
 # fixtures live in Python/test_data/ and are NOT matched by this.
 /Python/*.csv
+
+# Diagnostic dumps from validate_camera.py --save
+/Python/validate_*.png
 *.swp
 *.swo
