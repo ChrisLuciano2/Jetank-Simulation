@@ -314,14 +314,26 @@ texture near the horizon for a heading lock. Run this once after any change to t
 camera mounting, the lighting, or the floor material:
 
 ```bash
-py -3.8 validate_camera.py --save
+py -3.8 validate_camera.py --save --calibrate
 ```
 
-It compares `visual_scan` against `ProximitySensor`'s exact geometry, and `heading`
-against commanded `set_rotation` values. Both references are Unity-only with no hardware
-equivalent — which is precisely why they belong in a validation tool and nowhere near
-the navigation code. `--save` writes annotated PNGs for eyeballing the floor mask and
-the heading band.
+It confirms the frame really comes from the robot-mounted camera (by recovering the
+horizon and comparing it to the geometry's prediction), checks the floor mask, measures
+`heading` against commanded `set_rotation` values, and — with `--calibrate` — measures
+distance accuracy. These references are Unity-only with no hardware equivalent, which is
+precisely why they belong in a validation tool and nowhere near the navigation code.
+
+`--calibrate` **repositions the robot**, parking it squarely in front of a wide obstacle.
+That squareness is the point: comparing the two sensors ray-by-ray is *not* a distance
+test, because they have different origins, different angular sampling and different beam
+geometry, so nearest-bearing matching compares different objects wherever an obstacle
+edge falls between rays. Doing that produced a confident "distances are wrong by 4.5
+units" against a pipeline that measures to 0.7%. Only the head-on centre-ray comparison
+is unambiguous enough to call error.
+
+`--save` writes `validate_raw.png` — the unmodified frame, so segmentation can be
+iterated offline against real pixels instead of a Unity round trip per attempt — plus
+annotated views of the mask, scan and heading band.
 
 ---
 

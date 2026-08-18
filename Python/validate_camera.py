@@ -21,8 +21,10 @@ validation tool and nowhere near the navigation code.
 REQUIRES Unity playing, with RobotCamera and ProximitySensor in the scene
 (Tools > Setup Robot Simulator Scene adds both).
 
-    py -3.8 validate_camera.py            run every check
-    py -3.8 validate_camera.py --save     also write annotated PNGs
+    py -3.8 validate_camera.py             run every check
+    py -3.8 validate_camera.py --save      also write annotated PNGs
+    py -3.8 validate_camera.py --calibrate add the controlled accuracy test
+                                           (MOVES the robot to a known pose)
 """
 
 import math
@@ -35,6 +37,12 @@ from jetbot_nav import visual_scan, heading
 from jetbot_nav.visual_scan import CameraGeometry
 
 SAVE = "--save" in sys.argv
+CALIBRATE = "--calibrate" in sys.argv
+
+# Matches SceneSetup.CamForward: the camera sits this far ahead of the
+# robot origin, where ProximitySensor's rays start, so it is closer to
+# anything in front by roughly this much.
+SIM_CAM_FORWARD = 0.80
 
 _results = []
 
@@ -223,18 +231,27 @@ if have_truth:
             errors.append(abs(delta))
         print(f"   {a:+6.1f} | {d:6.2f} | {gt:6.2f} | {delta:+6.2f}  {note}")
 
+    # NOT a pass/fail check. Matching these two sensors ray-by-ray looked
+    # like a distance test and is not one: they have different origins
+    # (the camera sits ahead of the robot), different angular sampling
+    # (75 deg over 13 rays against 120 deg over 13), and different beam
+    # geometry. Nearest-bearing matching therefore compares DIFFERENT
+    # OBJECTS whenever an obstacle edge falls between rays, and a thin
+    # obstacle that slips between the range sensor's beams is invisible to
+    # one side entirely. Treating the resulting deltas as error produced a
+    # confident "distances are wrong by 4.5 units" against a pipeline whose
+    # height and tilt were both independently correct.
+    #
+    # Use --calibrate for an actual accuracy measurement.
     if errors:
         worst, mean = max(errors), sum(errors) / len(errors)
-        check("visual distances track ground truth outside the blind zone",
-              mean < 1.5,
-              f"mean |error| {mean:.2f}, worst {worst:.2f} over "
-              f"{len(errors)} comparable rays")
-    else:
-        warn("no rays were comparable",
-             "Nothing in view is both visible and within range. Drive toward "
-             "an obstacle and re-run — this check proves nothing as it stands.")
+        print()
+        print(f"  (informational: mean |delta| {mean:.2f}, worst {worst:.2f} "
+              f"over {len(errors)} rays. Large deltas here usually mean the "
+              f"two sensors are looking at different objects, not that either "
+              f"is wrong — run with --calibrate to measure accuracy properly.)")
 
-    # ── Height calibration ───────────────────────────────────────────────
+    # ── Height calibration (informational, same caveat) ──────────────────
     # Distance is height / tan(depression), so a wrong mounting height
     # scales EVERY reading by a constant factor while leaving the picture
     # looking entirely reasonable. The horizon check above cannot catch it:
@@ -245,11 +262,6 @@ if have_truth:
     # A uniform ratio across independent rays means height. A scattered
     # one means something else (a ray pair that is not actually looking at
     # the same object, or non-flat ground).
-
-    # Matches SceneSetup.CamForward: the camera sits this far ahead of the
-    # robot origin, where ProximitySensor's rays start, so it is closer to
-    # anything in front by roughly this much.
-    SIM_CAM_FORWARD = 0.80
 
     implied = []
     for a, d in zip(scan["angles_deg"], scan["distances"]):
@@ -283,14 +295,15 @@ if have_truth:
                  "Trust the clustered values, not the outliers.")
         else:
             off_by = abs(median_h - geom.height_m) / geom.height_m
-            check("configured camera height matches what the geometry implies",
-                  off_by < 0.15,
-                  f"configured {geom.height_m:.2f}, implied {median_h:.2f} "
-                  f"({off_by * 100:.0f}% off across {len(hs)} rays). Every "
-                  f"distance is scaled by this. Read RobotCamera's WORLD Y in "
-                  f"the Unity Inspector and set visual_scan.sim_jetank() to "
-                  f"match — do not just paste the implied number, since a "
-                  f"wrong tilt can masquerade as a wrong height.")
+            print(f"    median implied {median_h:.2f} against configured "
+                  f"{geom.height_m:.2f} ({off_by * 100:.0f}% apart)")
+            if off_by >= 0.15:
+                warn("implied height disagrees with the configured one",
+                     "This is only suggestive — it inherits the ray-matching "
+                     "problem above. Confirm with --calibrate before changing "
+                     "visual_scan.sim_jetank(), and check RobotCamera's world "
+                     "Y in the Inspector; a wrong tilt can masquerade as a "
+                     "wrong height.")
 
 
 # ─── 4. Heading: is there anything to lock onto? ─────────────────────────────
@@ -384,6 +397,71 @@ if sig is not None:
               "A sign error here turns the robot AWAY from its course.")
 
     face(0.0)     # leave the robot as we found it
+
+
+# ─── 5b. Controlled calibration (--calibrate; MOVES THE ROBOT) ───────────────
+# The ray-by-ray comparison cannot measure accuracy, because the two
+# sensors do not reliably see the same object on a given bearing. Remove
+# the ambiguity instead of trying to correct for it: park the robot
+# squarely in front of a wide obstacle so that BOTH centre rays are
+# certainly looking at the same flat face, and compare only those.
+#
+# On a wide face dead ahead the only remaining difference is the camera's
+# forward mount offset, which is a known constant — so any residual is
+# real calibration error rather than a matching artefact.
+
+if CALIBRATE and have_truth:
+    import time
+    print()
+    print("calibration run (this REPOSITIONS the robot — re-run Tools > Setup "
+          "Robot Simulator Scene afterwards if you want the old pose back)")
+
+    # In front of Door_Left, from SceneSetup's obstacle course: a 2-wide
+    # face centred at x=-3, front at z=11.5. Facing +z from x=-3 puts it
+    # dead ahead and square on.
+    sim_client.send_command({"command": "set_position", "x": -3.0, "y": 0.0, "z": 4.0})
+    sim_client.send_command({"command": "set_rotation", "rotation_y": 0.0})
+    time.sleep(0.6)
+
+    cframe = grab(camera)
+    ctruth = sim_client.send_query({"command": "get_proximity_scan"})
+
+    if cframe is None or not ctruth or ctruth.get("status") != "ok":
+        warn("calibration pose gave no reading", "skipped")
+    else:
+        cdist = [float(d) for d in ctruth["distances"]]
+        centre_truth = cdist[len(cdist) // 2]
+        cscan = visual_scan.free_space_scan(cframe, geom, n_rays=13)
+        centre_visual = cscan["distances"][len(cscan["distances"]) // 2]
+
+        if centre_truth >= float(ctruth["max_range"]) - 0.01:
+            warn("nothing dead ahead at the calibration pose",
+                 "The obstacle course may have been moved or deleted. Re-run "
+                 "Tools > Setup Robot Simulator Scene, then try again.")
+        elif centre_visual >= cscan["max_range"] - 0.01:
+            warn("the camera sees nothing dead ahead but the range sensor does",
+                 f"range sensor says {centre_truth:.2f}. If that is beyond the "
+                 "camera's useful reach this is expected; otherwise the floor "
+                 "mask is absorbing the obstacle.")
+        else:
+            expected = centre_truth - SIM_CAM_FORWARD
+            err = centre_visual - expected
+            implied_h = geom.height_m * expected / centre_visual
+            print(f"  range sensor, centre ray : {centre_truth:6.2f} "
+                  f"(from the robot origin)")
+            print(f"  same face from the camera: {expected:6.2f} "
+                  f"(minus the {SIM_CAM_FORWARD} forward mount)")
+            print(f"  visual_scan, centre ray  : {centre_visual:6.2f}")
+            print(f"  implied camera height    : {implied_h:6.3f} "
+                  f"(configured {geom.height_m})")
+            check("visual_scan matches geometry on an unambiguous target",
+                  abs(err) < 0.6,
+                  f"off by {err:+.2f} at {expected:.2f} "
+                  f"({abs(err) / expected * 100:.0f}%). Since this target is "
+                  f"unambiguous, this IS calibration error — implied height "
+                  f"{implied_h:.3f} against configured {geom.height_m}.")
+
+    sim_client.send_command({"command": "set_rotation", "rotation_y": 0.0})
 
 
 # ─── 6. Optional annotated dumps ─────────────────────────────────────────────
