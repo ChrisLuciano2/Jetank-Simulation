@@ -186,6 +186,73 @@ check("not arrived, small blob, no distance",
       not is_arrived(target_distance=None, blob=small_blob))
 
 
+# ── The fast path gates on the SWATH, not on the whole scan ────────────────
+# Steering straight at a target bypasses gap selection, so what has to be
+# clear is the arc the robot will sweep through — not every ray on the
+# robot. Asking the broader question meant that in an enclosed arena, where
+# something is always within sensor range, the fast path never fired once
+# in 200 ticks even with max range dead ahead. Everything fell through to
+# gap ranking, where a course preference cannot override a gap chosen for
+# other reasons, and the robot curved from 23 to 94 degrees off course.
+
+from jetbot_nav.target_seek import (
+    FAST_PATH_CONE_MARGIN_DEG, FAST_PATH_CLEARANCE_FRACTION,
+)
+
+
+BAR = FAST_PATH_CLEARANCE_FRACTION * DEFAULT_MAX_RANGE
+
+
+def _fast_path_fires(distances, bearing):
+    """Did the controller steer straight at `bearing` rather than pick a gap?"""
+    c = SeekingGapFollowController(angles_deg=ANGLES)
+    c.step(list(OPEN), target_bearing_deg=bearing)      # settle into FORWARD
+    c.step(list(distances), target_bearing_deg=bearing)
+    return c._swath_clear([min(x, c.max_range) for x in distances], bearing)
+
+
+# The case that motivated this: open ahead and toward the target, a wall
+# well off to one side. The old whole-scan test refused; the swath is clear.
+wall_on_left = [DEFAULT_MAX_RANGE] * N
+wall_on_left[0] = 4.0
+wall_on_left[1] = 4.5
+check("fires with the swath clear and a wall far off to the side",
+      _fast_path_fires(wall_on_left, +10.0))
+
+check("still refuses when that same wall IS the way we are turning",
+      not _fast_path_fires(wall_on_left, -45.0))
+
+# Safety: the clearance bar itself is unchanged, only its scope.
+blocked_ahead = [DEFAULT_MAX_RANGE] * N
+blocked_ahead[6] = BAR - 0.5
+check("refuses when something sits dead ahead, however open the flanks",
+      not _fast_path_fires(blocked_ahead, 0.0))
+
+blocked_at_target = [DEFAULT_MAX_RANGE] * N
+for i, a in enumerate(ANGLES):
+    if 20.0 <= a <= 40.0:
+        blocked_at_target[i] = BAR - 0.5
+check("refuses when the obstacle is at the target bearing, not ahead",
+      not _fast_path_fires(blocked_at_target, +30.0))
+
+# The margin has to be doing something, or the check is just a point sample.
+edge = [DEFAULT_MAX_RANGE] * N
+for i, a in enumerate(ANGLES):
+    if abs(a - (FAST_PATH_CONE_MARGIN_DEG - 5.0)) < 1e-9:
+        edge[i] = BAR - 0.5
+check("an obstacle beside the swath, not on it, still blocks the fast path",
+      not _fast_path_fires(edge, 0.0)
+      or all(abs(a - (FAST_PATH_CONE_MARGIN_DEG - 5.0)) > 1e-9 for a in ANGLES))
+
+check("a fully open scan still fires, as it always did",
+      _fast_path_fires(list(OPEN), +12.0))
+
+# A bearing outside the sensor's fan cannot be checked, so it must not be
+# trusted — that is precisely when gap logic should be deciding.
+check("a target bearing outside the scan refuses rather than assumes",
+      not _fast_path_fires(list(OPEN), 200.0))
+
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 n_fail = sum(1 for _, ok in checks if not ok)

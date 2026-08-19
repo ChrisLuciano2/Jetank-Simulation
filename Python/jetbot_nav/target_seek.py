@@ -88,6 +88,42 @@ from jetbot_nav.gap_follow import (
 
 # ─── Tuning constants ────────────────────────────────────────────────────────
 
+FAST_PATH_CONE_MARGIN_DEG = 15.0  # how far either side of the swath between
+                                 # straight-ahead and the target bearing must
+                                 # also be clear before the fast path steers
+                                 # straight at the target. The robot is not a
+                                 # point and does not pivot instantly, so
+                                 # checking only the exact bearings it passes
+                                 # through would clip whatever sits beside
+                                 # them.
+
+FAST_PATH_CLEARANCE_FRACTION = FULL_CLEAR_FRACTION   # how far that arc must
+                                 # be clear, as a fraction of max_range.
+                                 #
+                                 # UNCHANGED from the whole-scan test this
+                                 # replaces, and lowering it was tried and is
+                                 # a dead end. Every value from 6.0 up to
+                                 # 10.0 fails the offline slalom the same
+                                 # way — the robot stops making forward
+                                 # progress (z=5 against a bar of 20) — while
+                                 # 10.8 passes.
+                                 #
+                                 # The reason is not safety, it is speed:
+                                 # _steer scales speed by (1 - 0.5*|turn|),
+                                 # so the more often the fast path fires the
+                                 # harder the robot turns and the less ground
+                                 # it covers. A course error that sits near
+                                 # MAX_CORRECTION_DEG asks for a hard turn on
+                                 # every tick, and the robot converges on its
+                                 # heading by creeping. Firing the fast path
+                                 # more often makes that worse, not better.
+                                 #
+                                 # So the fast path is not the lever for
+                                 # getting course keeping to steer inside an
+                                 # enclosed arena. Leaving the bar where it
+                                 # was keeps this change to what it is: a
+                                 # correction of WHICH rays are consulted.
+
 LOST_HOLD_TICKS         = 5     # keep steering at the last-known bearing this
                                  # many ticks after detection drops, before
                                  # admitting the target is actually gone
@@ -257,12 +293,67 @@ class SeekingGapFollowController(GapFollowController):
         if self.state == FORWARD and self._target_bearing_deg is not None:
             d = [min(x, self.max_range) for x in distances]
             fwd_clear = self._forward_clearance(d)
-            if (fwd_clear >= STOP_FORWARD and
-                    all(x >= FULL_CLEAR_FRACTION * self.max_range for x in d)):
+            if (fwd_clear >= STOP_FORWARD
+                    and self._swath_clear(d, self._target_bearing_deg)):
                 self._target_deg = self._target_bearing_deg
                 return self._steer(self._target_bearing_deg, fwd_clear)
 
         return super().step(distances)
+
+    def _swath_clear(self, d, bearing: float) -> bool:
+        """
+        Is the arc the robot is about to sweep through open enough to steer
+        across without consulting the gap logic?
+
+        Two changes from the check this replaces, which asked whether EVERY
+        ray was at least 0.9 * max_range.
+
+        SCOPE. Only the arc between straight-ahead and the target bearing
+        can be driven into, so only that arc bears on whether steering
+        there is safe. The old test answered a much broader question — "is
+        the robot in open country" — which is a different thing, and in an
+        enclosed arena it is never true: measured over a drive, the nearest
+        ray ran 3.8 to 8.9 units against a 10.8 bar while 12.0 (max range,
+        nothing there) sat dead ahead, and the fast path fired on 1% of
+        ticks. Everything fell through to gap ranking, where a single gap
+        spanning the whole fan is steered at its MIDPOINT, so the course
+        preference was not overruled — it was never read. Mean distance
+        between the bearing asked for and the one steered was 39 deg.
+
+        BAR. FAST_PATH_CLEARANCE rather than 0.9 * max_range, because the
+        question is "does anything need avoiding yet", not "is the world
+        empty". SLOW_FORWARD is where gap_follow itself starts reacting to
+        an obstacle, so a swath clear beyond it needs no maneuvering, and
+        the gate is re-checked every tick — the moment something comes
+        closer, gap selection takes over again. Narrowing the scope alone
+        was tried first and left the path firing on 1% of ticks; the bar
+        was doing the blocking.
+        """
+        # Steering at a bearing the sensor cannot see means turning toward
+        # something unobserved, which is exactly when the gap logic should
+        # decide instead. Checking only the rays that fall inside the cone
+        # is not enough on its own: a bearing of 200 deg yields a cone
+        # containing the entire fan, every ray in it reads clear, and the
+        # unseen arc the robot would actually turn through is never looked
+        # at.
+        if not (self.angles_deg[0] <= bearing <= self.angles_deg[-1]):
+            return False
+
+        lo = min(0.0, bearing) - FAST_PATH_CONE_MARGIN_DEG
+        hi = max(0.0, bearing) + FAST_PATH_CONE_MARGIN_DEG
+
+        in_cone = [dist for ang, dist in zip(self.angles_deg, d)
+                   if lo <= ang <= hi]
+        if not in_cone:
+            return False
+
+        # The margin may run off the end of the fan; what is left is still
+        # checked. Deliberate rather than sloppy: the bearing itself is in
+        # view, the robot turns gradually, and this is re-evaluated every
+        # tick, so the unverified sliver past the edge is only entered
+        # after another look at it.
+        bar = FAST_PATH_CLEARANCE_FRACTION * self.max_range
+        return all(x >= bar for x in in_cone)
 
     def _choose_gap(self, gaps):
         """Same committed-direction hysteresis as the base class — that
