@@ -52,6 +52,14 @@ public class SimCamera : MonoBehaviour
     private volatile string _cachedFrameB64   = null;
     private volatile string _cachedDetections = "{\"status\":\"ok\",\"objects\":[]}";
 
+    // One-shot geometry report — see LogRenderGeometry().
+    private bool _loggedGeometry = false;
+
+    // What jetbot_nav.visual_scan.sim_jetank() assumes about this camera.
+    // Kept here so the log can state the discrepancy rather than just the
+    // values, because the values alone look fine until you compare them.
+    private const float PythonAssumedHFovDeg = 62.2f;
+
     // ── Unity lifecycle ───────────────────────────────────────────────────────
 
     private void Awake()
@@ -83,6 +91,16 @@ public class SimCamera : MonoBehaviour
         // Render camera into our RenderTexture
         RenderTexture prev = _cam.targetTexture;
         _cam.targetTexture = _rt;
+
+        // Read the aspect AFTER assigning targetTexture and BEFORE rendering:
+        // this is exactly the value Render() is about to use, which is the
+        // only one worth reporting.
+        if (!_loggedGeometry)
+        {
+            _loggedGeometry = true;
+            LogRenderGeometry();
+        }
+
         _cam.Render();
         _cam.targetTexture = prev;
 
@@ -95,6 +113,71 @@ public class SimCamera : MonoBehaviour
         // Encode to JPEG and base-64
         byte[] jpeg  = _tex.EncodeToJPG(jpegQuality);
         _cachedFrameB64 = System.Convert.ToBase64String(jpeg);
+    }
+
+    /// <summary>
+    /// One-shot report of the geometry this camera actually RENDERS with,
+    /// versus the geometry jetbot_nav assumes when it converts pixels to
+    /// angles.
+    ///
+    /// Why this exists: a live measurement (rotate a known angle, correlate
+    /// the raw pixel shift) put the rendered horizontal FOV at ~53 deg while
+    /// the Python model assumes 62.2, making every camera-derived angle ~21%
+    /// too large. Integrated over a drive that is the difference between
+    /// holding a course and ending 100 deg off it. The camera's fieldOfView
+    /// is only half the story — Unity derives HORIZONTAL fov from the
+    /// vertical one and the ASPECT, and aspect is not necessarily the
+    /// RenderTexture's just because we render into it.
+    /// </summary>
+    private void LogRenderGeometry()
+    {
+        float rtAspect = (float)captureWidth / captureHeight;
+        float aspect   = _cam.aspect;
+        float vfov     = _cam.fieldOfView;
+
+        // Unity's fieldOfView is vertical unless FOVAxisMode says otherwise.
+        float hfov = 2f * Mathf.Rad2Deg * Mathf.Atan(
+            Mathf.Tan(vfov * 0.5f * Mathf.Deg2Rad) * aspect);
+
+        // The horizontal fov we WOULD get if aspect matched the target.
+        float hfovIfRt = 2f * Mathf.Rad2Deg * Mathf.Atan(
+            Mathf.Tan(vfov * 0.5f * Mathf.Deg2Rad) * rtAspect);
+
+        string report =
+            "[SimCamera] RENDER GEOMETRY on '" + gameObject.name + "'\n" +
+            "  RenderTexture   : " + captureWidth + "x" + captureHeight +
+                " (aspect " + rtAspect.ToString("F4") + ")\n" +
+            "  Screen/GameView : " + Screen.width + "x" + Screen.height +
+                " (aspect " + ((float)Screen.width / Screen.height).ToString("F4") + ")\n" +
+            "  camera.aspect   : " + aspect.ToString("F4") +
+                (Mathf.Abs(aspect - rtAspect) > 0.01f
+                    ? "   <-- does NOT match the RenderTexture"
+                    : "   (matches the RenderTexture)") + "\n" +
+            "  fieldOfView     : " + vfov.ToString("F2") + " deg vertical" +
+                " (FOVAxisMode " + _cam.usePhysicalProperties + " physical)\n" +
+            "  -> horizontal   : " + hfov.ToString("F2") + " deg  ACTUAL\n" +
+            "  -> horizontal   : " + hfovIfRt.ToString("F2") +
+                " deg  if aspect were the RenderTexture's\n" +
+            "  Python assumes  : " + PythonAssumedHFovDeg.ToString("F2") + " deg\n" +
+            "  ANGLE ERROR     : " + (PythonAssumedHFovDeg / hfov).ToString("F4") +
+                "x  (1.0000 = camera and model agree)";
+
+        Debug.Log(report);
+        // Also push it down the query channel: Python's poller prints these,
+        // so the report reaches whoever is driving the robot rather than
+        // only whoever is looking at the Unity console.
+        SafetyMonitor.QueueWarning(report);
+
+        if (Mathf.Abs(aspect - rtAspect) > 0.01f)
+        {
+            Debug.LogWarning(
+                "[SimCamera] camera.aspect (" + aspect.ToString("F4") + ") is not " +
+                "the RenderTexture's (" + rtAspect.ToString("F4") + "). Unity is " +
+                "rendering with the Game View's aspect, so the captured frame's " +
+                "horizontal field of view CHANGES WITH THE EDITOR WINDOW SIZE and " +
+                "no fixed camera model can be correct. Fix by setting " +
+                "_cam.aspect = " + rtAspect.ToString("F4") + " before Render().");
+        }
     }
 
     // ── Object detection ──────────────────────────────────────────────────────
