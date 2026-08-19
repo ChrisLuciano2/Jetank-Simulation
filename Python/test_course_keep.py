@@ -263,6 +263,18 @@ def _anchor_keeper(gyro_heading, ticks_since_anchor=0):
 check("a lock reading the gyro agrees with is adopted",
       _anchor_keeper(10.0)._believable_anchor(12.0))
 
+# Re-anchoring is OFF by default. Measured over 6 runs feeding identical
+# frames to a driving keeper and an observing one, 1007 ticks each side:
+# lock on gave mean error 26.32 deg with 544 ticks over 20 deg, lock off
+# gave 4.67 deg with 2. The lock compares against a photograph taken from
+# the START POSITION, and once the robot has driven off it the view no
+# longer matches — correlation then settles on the same wrong alignment
+# every time, which reads as a confident measurement.
+check("the drift-free re-anchor is disabled by default",
+      CourseKeeper().use_lock is False)
+check("it can still be turned back on deliberately",
+      CourseKeeper(use_lock=True).use_lock is True)
+
 check("a wildly contradicted lock reading is refused",
       not _anchor_keeper(10.0)._believable_anchor(83.0))
 

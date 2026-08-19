@@ -31,7 +31,7 @@ keeps working untouched. Course-keeping can never talk the robot into an
 unsafe heading, only express a preference among headings gap_follow has
 already accepted.
 
-TWO HEADING SOURCES, BECAUSE NEITHER IS ENOUGH ALONE
+TWO HEADING SOURCES, AND WHY ONLY ONE IS USED
 ────────────────────────────────────────────────────────────────
 From jetbot_nav.heading:
 
@@ -42,12 +42,40 @@ From jetbot_nav.heading:
     the course was set, so its error cannot accumulate — but it only
     works within that ~28 deg window and needs texture in view.
 
-Used together they cover each other: the gyro carries the robot through
-a big detour, and whenever the lock CAN see the original view its
-drift-free reading replaces the accumulated one. That re-anchoring is the
-whole reason to run both; the gyro alone would slowly walk the "course"
-somewhere else, and the lock alone would go blind exactly when a large
-recovery manoeuvre needed it most.
+The design was for the gyro to carry the robot through a big detour and
+the lock's drift-free reading to re-anchor it whenever the original view
+came back into sight. That reasoning is sound and the measurement does
+not support it, so `use_lock` defaults to False and the gyro runs alone.
+
+The premise that fails is "the lock compares against the original view".
+It compares against the original PHOTOGRAPH, taken from the original
+POSITION. Once the robot has driven a few units the scene genuinely no
+longer matches, and correlation does not fail loudly — it settles on the
+same wrong alignment every time, which is worse than noise because a
+consistent error looks like a confident measurement.
+
+Measured by driving one keeper and feeding a second the identical frames,
+so the two differ only in whether a lock reading may re-anchor the gyro.
+Six runs, 1007 ticks each side:
+
+    lock ON    mean error 26.32 deg   worst 93.12   544 ticks over 20 deg
+    lock OFF   mean error  4.67 deg   worst 21.28     2 ticks over 20 deg
+
+Every individual run agreed, whichever keeper was driving. Closed-loop
+final heading error was 79/76/56 deg driving with the lock against
+35/9/15 without.
+
+So the gyro's drift, which the lock exists to bound, is not currently the
+limiting error — over a 28 second drive it holds to about 4.7 deg. Over a
+much longer run it would be, and nothing here solves that. Doing so needs
+a reference that survives translation: recognisable landmarks, or
+re-capturing the reference with a known heading. Until then, bounded
+runs.
+
+CourseLock itself is not the problem and is left intact — it is accurate
+for rotation in place, which is what its own tests cover. Set
+use_lock=True to re-enable re-anchoring, and re-run the A/B above before
+trusting it.
 
 WHEN HEADING IS UNKNOWN, DO NOT GUESS
 ────────────────────────────────────────────────────────────────
@@ -194,10 +222,12 @@ class CourseKeeper:
     """
 
     def __init__(self, geom=None, controller=None,
-                 tolerance_deg: float = COURSE_TOLERANCE_DEG):
+                 tolerance_deg: float = COURSE_TOLERANCE_DEG,
+                 use_lock: bool = False):
         self.geom = geom
         self.controller = controller or SeekingGapFollowController()
         self.tolerance_deg = tolerance_deg
+        self.use_lock = use_lock
 
         self.state = UNKNOWN
         self.course_error_deg = None    # + means pointing RIGHT of course
@@ -297,7 +327,8 @@ class CourseKeeper:
         self._gyro.update(frame, depth=depth)
         self._ticks_since_anchor += 1
 
-        locked = self._lock.error_deg(frame, depth=depth)
+        locked = (self._lock.error_deg(frame, depth=depth)
+                  if self.use_lock else None)
         if locked is not None and self._believable_anchor(locked):
             # Drift-free reading, and the gyro does not contradict it —
             # re-anchor the accumulator. This is the entire point of
