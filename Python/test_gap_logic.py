@@ -217,6 +217,17 @@ def wall(ax, az, bx, bz):
     return (ax, az, bx, bz)
 
 
+def cube(cx, cz, size):
+    """Four walls forming a closed box — the simplest real obstacle.
+    Module level so other suites (test_course_keep) can build the same
+    scenarios rather than reimplementing the geometry."""
+    hw = size / 2
+    return [wall(cx - hw, cz - hw, cx + hw, cz - hw),
+            wall(cx + hw, cz - hw, cx + hw, cz + hw),
+            wall(cx + hw, cz + hw, cx - hw, cz + hw),
+            wall(cx - hw, cz + hw, cx - hw, cz - hw)]
+
+
 # ─── Scenario A: parallel wall — the reported oscillation geometry ───────────
 
 def scenario_wall_parallel():
@@ -327,13 +338,6 @@ def scenario_open_field():
 # here (with realistic motor lag): pass the cube with at most one backup.
 
 def scenario_single_cube():
-    def cube(cx, cz, size):
-        hw = size / 2
-        return [wall(cx - hw, cz - hw, cx + hw, cz - hw),
-                wall(cx + hw, cz - hw, cx + hw, cz + hw),
-                wall(cx + hw, cz + hw, cx - hw, cz + hw),
-                wall(cx - hw, cz + hw, cx - hw, cz - hw)]
-
     for ox in (0.0, 0.3, 0.6):
         sim = MiniSim(cube(ox, 9, 1.0), x=0, z=0, h=0.0)
         ctrl = make_controller()

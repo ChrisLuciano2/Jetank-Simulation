@@ -17,6 +17,12 @@ MODULES
     heading      — relative yaw from the camera (visual gyro + course lock)
     gap_follow   — follow-the-gap obstacle avoidance from an N-ray scan
     target_seek  — gap_follow biased toward a colour-detected target
+    course_keep  — hold a heading across obstacle detours
+
+target_seek and course_keep are the same mechanism pointed at different
+questions: both bias WHICH GAP gap_follow prefers rather than blending a
+second steering value into its output, so neither can talk the robot into
+a heading gap_follow has not already accepted as safe.
 
 visual_scan and heading split the frame between them: visual_scan walks up
 from the bottom for near-field DISTANCE, heading reads the band around the
@@ -35,8 +41,10 @@ distance array and does not care how the numbers were produced.
 
 from . import gap_follow
 from . import target_seek
+from . import course_keep
 
-__all__ = ["gap_follow", "target_seek", "perception", "visual_scan", "heading"]
+__all__ = ["gap_follow", "target_seek", "course_keep",
+           "perception", "visual_scan", "heading"]
 
 _LAZY = {"perception", "visual_scan", "heading"}
 

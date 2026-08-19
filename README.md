@@ -203,6 +203,7 @@ on top of the shims. Nothing in it is simulation-aware.
 | `heading` | Relative yaw from the camera — `VisualGyro` (continuous) and `CourseLock` (drift-free snapshot re-acquisition) | numpy |
 | `gap_follow` | Follow-the-gap avoidance: marks rays beyond `GAP_THRESHOLD` free, finds contiguous runs wide enough to fit through, steers at the chosen gap's centre. `FORWARD` / `PIVOT` / `BACKUP` / `SEARCH` recovery states. | stdlib only |
 | `target_seek` | `SeekingGapFollowController` — biases *which gap* `gap_follow` prefers toward a target's bearing, rather than blending steering values. Target bias is suppressed entirely during recovery states. | stdlib only |
+| `course_keep` | `CourseKeeper` — remembers a heading and steers back to it after an obstacle detour | stdlib only |
 
 ### Hardware parity — the camera is the only sensor
 
@@ -286,6 +287,42 @@ Both return `None` rather than guess when the view is featureless or the match i
 untrustworthy. A wrong heading is worse than a missing one: the caller can wait out a
 missing one but will confidently drive the wrong way on a fabricated one.
 
+### Holding a course
+
+`gap_follow` is good at not hitting things and has no idea where it is going. Every
+avoidance manoeuvre leaves the robot pointing somewhere new, and it then drives straight
+from that heading forever — so after a few obstacles it is travelling in an essentially
+random direction, having behaved correctly at every step.
+
+```python
+from jetbot_nav import course_keep
+course_keep.drive_keeping_course(duration=30.0)
+```
+
+Measured in the closed-loop simulator, final heading error after the detour:
+
+| scenario | plain `gap_follow` | with `CourseKeeper` |
+|---|---|---|
+| one cube | −38.2° | **+0.1°** |
+| slalom, three obstacles | −38.7° | **−0.2°** |
+
+`CourseKeeper` owns no steering logic. It computes one number — the course error — and
+hands the corresponding bearing to `SeekingGapFollowController`, the same gap-biasing
+mechanism `target_seek` uses. Corridor clearance, gap hysteresis, the recovery states,
+and the rule that bias is **suppressed** during them all keep working untouched, so
+course-keeping can only express a preference among headings `gap_follow` has already
+accepted as safe.
+
+It uses both heading sources together because neither suffices alone: `VisualGyro`
+carries the robot through a detour larger than a snapshot can measure, and whenever
+`CourseLock` *can* see the original view, its drift-free reading re-anchors the
+accumulator. When both fail — an untextured view — the robot reverts to plain
+gap-following and reports `UNKNOWN` rather than steering toward a fabricated heading.
+
+**Limitation: this corrects direction, not position.** The robot ends up *parallel* to
+its original course, generally offset sideways from it (x=−4.9 after the slalom above).
+Removing that offset needs position estimation, not just heading.
+
 | Suite | Covers |
 |-------|--------|
 | `test_gap_logic.py` | Closed-loop: a miniature 2D simulator with real raycasting and differential-drive kinematics, so the controller's steering changes what it senses next. Recorded field failures replay from `test_data/`. |
@@ -293,6 +330,7 @@ missing one but will confidently drive the wrong way on a fabricated one.
 | `test_visual_scan.py` | Camera projection, pinned against hand-computed distances — a segmentation bug is loud, but a projection bug returns plausible numbers that are uniformly wrong. |
 | `test_heading.py` | Visual yaw. Synthetic frames are rendered through real pinhole geometry rather than by rolling pixels, so the test can't confirm the estimator's own assumptions. |
 | `test_target_seek.py` | The colour-seeking layer on top of gap-following. |
+| `test_course_keep.py` | Course keeping, closed-loop, fed the simulator's exact heading — the estimator is tested separately, so this isolates the control loop. Every "returns to course" check is paired against a plain `gap_follow` run, since returning to course only means something if not doing it looks different. |
 
 `gap_follow` is tuned for the camera rather than the original 120° fan. `CORRIDOR_HALF`
 is 1.7 (at 2.0, a 4-unit doorway put both edges exactly on the blocking threshold, and
