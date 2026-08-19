@@ -169,7 +169,7 @@ class CourseKeeper:
 
     # ── Heading estimation ───────────────────────────────────────────────
 
-    def _measure(self, frame, heading_deg):
+    def _measure(self, frame, heading_deg, depth=None):
         """Course error in degrees (+ = right of course), or None."""
         if heading_deg is not None:
             self.lock_used = False
@@ -181,9 +181,9 @@ class CourseKeeper:
         # Always advance the gyro, even when the lock ends up answering:
         # skipping it would leave a gap in the accumulator the moment the
         # lock loses sight of the reference view.
-        self._gyro.update(frame)
+        self._gyro.update(frame, depth=depth)
 
-        locked = self._lock.error_deg(frame)
+        locked = self._lock.error_deg(frame, depth=depth)
         if locked is not None:
             # Drift-free reading available — re-anchor the accumulator to
             # it. This is the entire point of running both sources.
@@ -217,7 +217,18 @@ class CourseKeeper:
         Identical in contract to GapFollowController.step(), so this is a
         drop-in for any loop already driving one.
         """
-        error = self._measure(frame, heading_deg)
+        # The scan already says how far away the scene is, so the lever-arm
+        # correction costs nothing extra and no caller has to know about it.
+        # The MEDIAN, not the nearest: one close obstacle in an otherwise
+        # open view should not shrink the depth the whole correction is
+        # scaled by, and it is the bulk of the view that the heading
+        # correlation is reading.
+        depth = None
+        if distances:
+            ordered = sorted(distances)
+            depth = ordered[len(ordered) // 2]
+
+        error = self._measure(frame, heading_deg, depth=depth)
         self.course_error_deg = error
 
         if error is None:

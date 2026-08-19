@@ -110,7 +110,8 @@ def sim_jetank(width: int = 640, height: int = 480) -> "CameraGeometry":
     return CameraGeometry(height_m=0.80, tilt_deg=20.0,
                           hfov_deg=IMX219_STANDARD[0],
                           vfov_deg=IMX219_STANDARD[1],
-                          width=width, height=height)
+                          width=width, height=height,
+                          pivot_offset=0.80)   # SceneSetup.CamForward
 
 
 class CameraGeometry:
@@ -124,7 +125,8 @@ class CameraGeometry:
     def __init__(self, height_m: float, tilt_deg: float,
                  hfov_deg: float = IMX219_STANDARD[0],
                  vfov_deg: float = IMX219_STANDARD[1],
-                 width: int = 640, height: int = 480):
+                 width: int = 640, height: int = 480,
+                 pivot_offset: float = 0.0):
         if height_m <= 0:
             raise ValueError("height_m must be positive (camera above the floor)")
         if not 0 < tilt_deg < 90:
@@ -134,6 +136,27 @@ class CameraGeometry:
 
         self.height_m = float(height_m)
         self.tilt_deg = float(tilt_deg)
+
+        # How far AHEAD of the robot's turning centre the camera sits.
+        #
+        # Only heading estimation cares. A skid-steer robot turns about a
+        # point between its tracks, so a camera mounted forward of that
+        # point does not just rotate — it swings sideways through an arc,
+        # and that sideways motion moves the whole scene across the frame
+        # exactly as an extra rotation would. Frame-to-frame correlation
+        # cannot tell the two apart and reports their sum, so every yaw
+        # reads high by roughly (1 + pivot_offset / depth).
+        #
+        # Measured in sim before correcting: 8.0-9.4% over-read across
+        # rotation in place and turns while driving, against 6.7-8.8%
+        # predicted by that expression. Small per tick, but it INTEGRATES
+        # — VisualGyro accumulates, so a bias runs the total past 360 deg
+        # over a drive while each individual reading still looks sane.
+        #
+        # Defaults to 0 (no correction) because it is a physical
+        # measurement of a particular mounting, and silently assuming a
+        # value for an unknown robot would be worse than not correcting.
+        self.pivot_offset = float(pivot_offset)
         self.hfov_deg = float(hfov_deg)
         self.vfov_deg = float(vfov_deg)
         self.width = int(width)

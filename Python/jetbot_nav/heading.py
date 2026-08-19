@@ -424,6 +424,45 @@ def yaw_between(ref_sig: np.ndarray, live_sig: np.ndarray,
     return shift * deg_per_bin
 
 
+MIN_CORRECTABLE_DEPTH = 1.5   # below this the correction is not applied.
+                        # The factor blows up as depth falls (at 0.8 units it
+                        # would halve every reading), and a depth that small
+                        # means the view is filled by one close object, which
+                        # is both the least reliable input to the estimate and
+                        # the case where a big multiplicative correction does
+                        # the most damage if the depth is wrong.
+
+MAX_LEVER_GAIN = 1.6    # never divide by more than this, whatever the depth.
+                        # A guard, not a tuning knob: a correction that can
+                        # scale a reading arbitrarily is a new way to be
+                        # confidently wrong, which is the failure this module
+                        # exists to avoid.
+
+
+def lever_arm_gain(geom, depth: float) -> float:
+    """
+    How much larger than the true yaw a correlation reading will be, for a
+    camera mounted `geom.pivot_offset` ahead of the robot's turning centre
+    looking at content `depth` away.
+
+    Turning by t swings the camera sideways by about pivot_offset * t, and
+    that sideways motion shifts content at distance d by pivot_offset * t / d
+    in bearing. The camera sees the sum, so:
+
+        apparent = true * (1 + pivot_offset / depth)
+
+    Returns 1.0 (no correction) when the geometry does not say where the
+    camera sits, when the depth is unknown, or when the depth is too small
+    to correct against — see MIN_CORRECTABLE_DEPTH.
+    """
+    if geom is None or depth is None:
+        return 1.0
+    offset = getattr(geom, "pivot_offset", 0.0)
+    if offset <= 0.0 or depth < MIN_CORRECTABLE_DEPTH:
+        return 1.0
+    return min(1.0 + offset / float(depth), MAX_LEVER_GAIN)
+
+
 def measurable_range_deg(geom=None, width: int = None) -> float:
     """
     Largest yaw magnitude that can be measured at all, in degrees. Beyond
@@ -464,10 +503,19 @@ class VisualGyro:
         self.lost_frames = 0
         self._prev_sig = None
 
-    def update(self, frame_rgb: np.ndarray):
+    def update(self, frame_rgb: np.ndarray, depth: float = None):
         """
         Feed one frame. Returns the yaw delta in degrees since the previous
         frame, or None if this frame could not be matched.
+
+        `depth` is roughly how far away the scene in view is, in the same
+        units the caller's scan reports. Supplying it corrects the
+        over-read caused by the camera sitting ahead of the turning centre
+        (see lever_arm_gain); omitting it leaves the reading uncorrected
+        rather than guessing at a distance. It matters here more than
+        anywhere else in this module, because this is the one estimate
+        that ACCUMULATES: a steady few percent is invisible per tick and
+        unbounded over a drive.
 
         On None the accumulated heading is left UNCHANGED rather than
         guessed at — a gap in the record is recoverable, an invented delta
@@ -507,6 +555,8 @@ class VisualGyro:
             # rather than as a failure.
             self._prev_sig = sig
             return None
+
+        delta /= lever_arm_gain(self.geom, depth)
 
         self.heading_deg += delta
         self.lost_frames = 0
@@ -559,19 +609,31 @@ class CourseLock:
     def clear(self):
         self._ref_sig = None
 
-    def error_deg(self, frame_rgb: np.ndarray):
+    def error_deg(self, frame_rgb: np.ndarray, depth: float = None):
         """
         Degrees the robot has turned away from the captured course:
         POSITIVE means it is now pointing right of it, so it must turn
         LEFT to recover. None if not armed, or if this frame cannot be
         matched to the reference (turned so far the views no longer
         overlap, or looking at something featureless).
+
+        `depth` applies the same lever-arm correction VisualGyro uses. It
+        is a weaker approximation here: this compares against a frame the
+        robot may have driven a long way from, so the difference between
+        the two views is rotation AND translation, while the correction
+        only models the sideways swing of a turn. It is still the right
+        sign and roughly the right size, and unlike the gyro a mistake
+        here does not accumulate — each reading is independent of the
+        last.
         """
         if self._ref_sig is None:
             return None
         live = column_signature(frame_rgb, self.geom, self.band)
-        return yaw_between(self._ref_sig, live,
-                           degrees_per_bin(self.geom, frame_rgb.shape[1]))
+        raw = yaw_between(self._ref_sig, live,
+                          degrees_per_bin(self.geom, frame_rgb.shape[1]))
+        if raw is None:
+            return None
+        return raw / lever_arm_gain(self.geom, depth)
 
     @staticmethod
     def on_course(error_deg: float, tolerance: float = ARRIVED_DEG) -> bool:

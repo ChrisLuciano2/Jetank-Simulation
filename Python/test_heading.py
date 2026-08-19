@@ -449,6 +449,67 @@ check("the unmeasured rotation is a permanent offset, not silently invented",
       f"heading {_g.heading_deg:.1f} after 66 deg of true rotation")
 
 
+# ─── 6f. Lever-arm correction ───────────────────────────────────────────────
+# A camera mounted ahead of the turning centre swings sideways when the
+# robot turns, and that sideways motion is indistinguishable from extra
+# rotation. Measured in sim: readings ran 8.0-9.4% high across rotation in
+# place and turns while driving. Per tick that is invisible; VisualGyro
+# accumulates, so over a drive it ran the total past 360 deg.
+
+from jetbot_nav.heading import (
+    lever_arm_gain, MIN_CORRECTABLE_DEPTH, MAX_LEVER_GAIN,
+)
+from jetbot_nav.visual_scan import CameraGeometry
+
+_off = CameraGeometry(height_m=0.8, tilt_deg=20.0)                    # no offset
+_on = CameraGeometry(height_m=0.8, tilt_deg=20.0, pivot_offset=0.8)
+
+check("no correction when the geometry does not say where the camera sits",
+      lever_arm_gain(_off, 12.0) == 1.0, f"got {lever_arm_gain(_off, 12.0)}")
+check("no correction when depth is unknown",
+      lever_arm_gain(_on, None) == 1.0, f"got {lever_arm_gain(_on, None)}")
+check("gain matches 1 + offset/depth",
+      abs(lever_arm_gain(_on, 12.0) - (1.0 + 0.8 / 12.0)) < 1e-9,
+      f"got {lever_arm_gain(_on, 12.0)}")
+check("further away means less correction",
+      lever_arm_gain(_on, 24.0) < lever_arm_gain(_on, 6.0),
+      f"{lever_arm_gain(_on, 24.0)} vs {lever_arm_gain(_on, 6.0)}")
+
+# Guards. A correction that can scale a reading without limit is just a
+# new way to be confidently wrong.
+check("correction disabled below MIN_CORRECTABLE_DEPTH",
+      lever_arm_gain(_on, MIN_CORRECTABLE_DEPTH - 0.01) == 1.0,
+      f"got {lever_arm_gain(_on, MIN_CORRECTABLE_DEPTH - 0.01)}")
+check("gain is capped at MAX_LEVER_GAIN",
+      lever_arm_gain(_on, MIN_CORRECTABLE_DEPTH) <= MAX_LEVER_GAIN,
+      f"got {lever_arm_gain(_on, MIN_CORRECTABLE_DEPTH)}")
+
+# End to end: the same rotation, corrected and uncorrected, using the
+# panning world from 6e so the "true" answer is known exactly.
+_g_raw = VisualGyro(_off)
+_g_cor = VisualGyro(_on)
+_g_raw.update(_pan(0.0))
+_g_cor.update(_pan(0.0))
+for _y in (2.0, 4.0, 6.0, 8.0, 10.0):
+    _g_raw.update(_pan(_y))
+    _g_cor.update(_pan(_y), depth=12.0)
+check("the correction reduces an accumulated reading, and only slightly",
+      _g_cor.heading_deg < _g_raw.heading_deg
+      and _g_cor.heading_deg > 0.85 * _g_raw.heading_deg,
+      f"raw {_g_raw.heading_deg:.2f} corrected {_g_cor.heading_deg:.2f}")
+
+# A caller that never supplies depth must get exactly the old behaviour,
+# so adding the offset to a geometry cannot change existing results on its
+# own. This is what makes the correction safe to add to sim_jetank.
+_g_nodepth = VisualGyro(_on)
+_g_nodepth.update(_pan(0.0))
+for _y in (2.0, 4.0, 6.0, 8.0, 10.0):
+    _g_nodepth.update(_pan(_y))
+check("an offset geometry with no depth behaves exactly as before",
+      abs(_g_nodepth.heading_deg - _g_raw.heading_deg) < 1e-9,
+      f"nodepth {_g_nodepth.heading_deg:.4f} raw {_g_raw.heading_deg:.4f}")
+
+
 # ─── 7. Works without a CameraGeometry (hardware default lens) ──────────────
 
 plain = CourseLock(None)
