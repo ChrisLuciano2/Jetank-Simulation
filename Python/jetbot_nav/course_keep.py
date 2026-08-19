@@ -377,6 +377,23 @@ class CourseKeeper:
             depth = ordered[len(ordered) // 2]
 
         error = self._measure(frame, heading_deg, depth=depth)
+
+        # Wrap before ANY use. VisualGyro accumulates without bound — it has
+        # been measured past +360 on a half-minute drive — and a raw
+        # accumulated heading is not a course error. Two things break if it
+        # is used as one:
+        #
+        #   - the correction inverts. bearing = -error clamped, so an error
+        #     of +183 asks for a hard LEFT when the robot is 177 deg to the
+        #     LEFT of course and needs to go right. Measured before this
+        #     wrap: 80 of 170 ticks had |error| > 180, and the robot steered
+        #     toward its course on only 41% of the ticks it was off it —
+        #     worse than choosing at random, while steering hard the whole
+        #     time.
+        #   - a robot exactly back on course after a full turn reads as 360
+        #     deg off and never reports ON_COURSE.
+        if error is not None:
+            error = _wrap180(error)
         self.course_error_deg = error
 
         if error is None:

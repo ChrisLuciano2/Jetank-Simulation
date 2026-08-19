@@ -232,6 +232,45 @@ check("emergency recovery actually engaged (otherwise nothing was tested)",
       f"state was {keeper_r.controller.state}")
 
 
+# ─── The course error must be wrapped before it steers anything ─────────────
+# VisualGyro accumulates without bound and has been measured past +360 on a
+# half-minute drive. Used raw, an error of +183 asks for a hard LEFT while
+# the robot is 177 deg to the LEFT of course and needs to go right. Measured
+# before the wrap: 80 of 170 ticks had |error| > 180 and the robot steered
+# toward its course on only 41% of the ticks it was off it.
+
+_clear = [12.0] * 13
+
+for _raw, _equiv in ((190.0, -170.0), (-190.0, 170.0),
+                     (360.0, 0.0), (540.0, 180.0)):
+    _a = CourseKeeper(controller=make_seeking())
+    _a.set_course(frame=None)
+    _b = CourseKeeper(controller=make_seeking())
+    _b.set_course(frame=None)
+    _ma = _a.step(list(_clear), heading_deg=_raw)
+    _mb = _b.step(list(_clear), heading_deg=_equiv)
+    check(f"a course error of {_raw:+.0f} is treated as {_equiv:+.0f}",
+          _ma == _mb and abs(wrap(_a.course_error_deg - _equiv)) < 1e-6,
+          f"motors {_ma} vs {_mb}, reported {_a.course_error_deg}")
+
+# The sign of the correction is the whole point: 183 deg off means the
+# SHORT way back is the other way round.
+_k_wrap = CourseKeeper(controller=make_seeking())
+_k_wrap.set_course(frame=None)
+_left, _right = _k_wrap.step(list(_clear), heading_deg=183.0)
+check("183 deg off course steers the short way round, not the long way",
+      _right < _left,
+      f"motors L={_left:+.2f} R={_right:+.2f} for reported error "
+      f"{_k_wrap.course_error_deg:+.1f}")
+
+_k_full = CourseKeeper(controller=make_seeking())
+_k_full.set_course(frame=None)
+_k_full.step(list(_clear), heading_deg=360.0)
+check("a full turn back onto course reports ON_COURSE, not 360 deg off",
+      _k_full.state == ON_COURSE,
+      f"state {_k_full.state}, error {_k_full.course_error_deg}")
+
+
 # ─── Guarding the drift-free anchor ─────────────────────────────────────────
 # A CourseLock reading replaces the accumulated heading outright, so one
 # bad reading is the single most damaging thing that can happen here.

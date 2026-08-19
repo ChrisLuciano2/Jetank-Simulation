@@ -78,7 +78,37 @@ namespace RobotSimulator
                         float l = Mathf.Clamp(cmd.left,  -1f, 1f);
                         float r = Mathf.Clamp(cmd.right, -1f, 1f);
                         _throttle     = (l + r) * 0.5f;
-                        _steering     = (r - l) * 0.5f;
+                        // (l - r), not (r - l). On a differential drive the
+                        // LEFT track running faster turns the robot RIGHT,
+                        // and _steering feeds transform.Rotate(0, +turn, 0),
+                        // which is clockwise/right in Unity.
+                        //
+                        // This was backwards, so every steering command the
+                        // Python side issued produced the opposite turn.
+                        // Measured before the fix: set_motors(L=+0.40,
+                        // R=+0.10) yawed -17.4 deg (left) where it should
+                        // yaw right, and set_motors(L=-0.30, R=+0.30) spun
+                        // right where it should spin left.
+                        //
+                        // Obstacle avoidance hid it for a long time, because
+                        // going the WRONG way around an obstacle still
+                        // avoids the obstacle — the robot just passes it on
+                        // the other side. Course keeping is what exposed it:
+                        // steering consistently away from a target turns the
+                        // controller into a repulsive one, whose stable
+                        // point is 180 deg off. Four consecutive live runs
+                        // ended between 169 and 171 deg from their course,
+                        // having driven backwards along it.
+                        //
+                        // jetbot_nav is the reference for this convention and
+                        // is self-consistent: gap_follow._steer emits
+                        // left = speed + turn with positive turn meaning
+                        // right, and the offline simulator in
+                        // test_gap_logic.py integrates yaw from (wl - wr).
+                        // Both agree with each other and disagreed with this
+                        // line, which is why the whole offline suite passed
+                        // while the robot drove backwards.
+                        _steering     = (l - r) * 0.5f;
                         _moveToTarget = false;
                         if (Mathf.Abs(_throttle) < 0.05f && Mathf.Abs(_steering) > 0.05f)
                             _throttle = 0.001f * Mathf.Sign(_steering);
