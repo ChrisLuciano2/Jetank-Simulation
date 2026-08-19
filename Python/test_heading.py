@@ -348,6 +348,107 @@ check("score threshold sits in a gap between the populations",
       f"{bad_score}, threshold {MIN_CONFIDENCE}")
 
 
+# ─── 6d. A railed peak is rejected, not reported ────────────────────────────
+# Regression for the first live course-keeping run, where VisualGyro
+# accumulated in steps of exactly max_shift * deg_per_bin (+28.0 deg) and
+# course keeping steered on the total. When the true alignment is outside
+# the searched span the argmax pins to the boundary, and a boundary peak
+# passes both score gates: its overlap is the narrowest available (easy to
+# match by accident) and it is one-sided, so the excluded-rival set holds
+# only the far tail and prominence comes out high.
+#
+# Constructed directly rather than by rendering a large yaw, because the
+# point is what happens AT the boundary regardless of how it got there.
+
+from jetbot_nav.heading import (
+    MAX_SHIFT_FRACTION, RAIL_MARGIN_BINS, yaw_between,
+)
+
+_n = 640
+_max_shift = int(_n * MAX_SHIFT_FRACTION)
+_dpb = degrees_per_bin(GEOM, _n)
+
+# A signature that correlates best with itself shifted right to the rail:
+# a single sharp feature, so the peak is unambiguous and clears both gates.
+_rng = np.random.RandomState(7)
+_base = _rng.randn(_n)
+
+
+def _norm(v):
+    v = v - v.mean()
+    return v / float(np.sqrt((v ** 2).sum()))
+
+
+for _railed_shift in (_max_shift, -_max_shift):
+    _ref = _norm(_base)
+    _live = _norm(np.roll(_base, -_railed_shift))
+    _got = yaw_between(_ref, _live, _dpb, max_shift=_max_shift)
+    check(f"peak railed at {_railed_shift:+d} bins reports None, not "
+          f"{_railed_shift * _dpb:+.1f} deg",
+          _got is None, f"got {_got}")
+
+# The rejection must be narrow: a genuine large-but-measurable yaw still
+# has to get through, or the fix has simply broken the estimator.
+_inside = _max_shift - RAIL_MARGIN_BINS - 4
+_ref = _norm(_base)
+_live = _norm(np.roll(_base, -_inside))
+_got = yaw_between(_ref, _live, _dpb, max_shift=_max_shift)
+check("a shift just inside the rail still measures",
+      _got is not None and abs(_got - _inside * _dpb) < 0.5,
+      f"want {_inside * _dpb:+.2f}, got {_got}")
+
+check("measurable_range_deg excludes the rejected boundary bins",
+      measurable_range_deg(GEOM, _n) < _max_shift * _dpb,
+      f"range {measurable_range_deg(GEOM, _n):.3f} vs searched "
+      f"{_max_shift * _dpb:.3f}")
+
+
+# ─── 6e. One unmeasurable step must not blind the gyro forever ──────────────
+# The rail rejection above turns a fast turn into a None. That is correct,
+# but update() also has to re-baseline on the way out, or every subsequent
+# frame is compared against the pre-jump view and fails for the same
+# reason — one bad step becomes a permanent blackout. Measured live: 133
+# of 164 ticks with no heading at all after a single fast pivot.
+
+_dpb7 = degrees_per_bin(GEOM, 640)
+_prof = np.random.RandomState(3).randn(4000)
+_prof = np.convolve(_prof, np.ones(9) / 9, mode="same")
+_prof = ((_prof - _prof.min()) / (_prof.max() - _prof.min()) * 255)
+_world = np.repeat(_prof.astype(np.uint8)[None, :], 480, axis=0)
+_world = np.repeat(_world[:, :, None], 3, axis=2)
+
+
+def _pan(yaw_deg):
+    c = 1500 + int(round(yaw_deg / _dpb7))
+    return _world[:, c:c + 640, :]
+
+
+_g = VisualGyro(GEOM)
+_g.update(_pan(0.0))
+_before = [_g.update(_pan(y)) for y in (2.0, 4.0, 6.0)]
+check("gyro tracks small steps before the jump",
+      all(d is not None for d in _before), f"got {_before}")
+
+_jump = _g.update(_pan(60.0))          # far outside the measurable range
+check("an out-of-range step reports None rather than a railed number",
+      _jump is None, f"got {_jump}")
+
+_after = [_g.update(_pan(y)) for y in (62.0, 64.0, 66.0)]
+check("gyro RESUMES tracking on the next frame after an unmeasurable step",
+      all(d is not None and abs(d - 2.0) < 0.6 for d in _after),
+      f"got {_after}")
+
+check("lost_frames clears once tracking resumes",
+      _g.lost_frames == 0, f"got {_g.lost_frames}")
+
+# The missed rotation stays missing — that is the honest outcome, and it
+# is precisely why CourseKeeper declares UNKNOWN and CourseLock re-anchors
+# rather than trusting the accumulator indefinitely.
+check("the unmeasured rotation is a permanent offset, not silently invented",
+      _g.heading_deg < 20.0,
+      f"heading {_g.heading_deg:.1f} after 66 deg of true rotation")
+
+
 # ─── 7. Works without a CameraGeometry (hardware default lens) ──────────────
 
 plain = CourseLock(None)

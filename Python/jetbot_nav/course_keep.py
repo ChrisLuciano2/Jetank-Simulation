@@ -88,6 +88,17 @@ COURSE_TOLERANCE_DEG = 5.0   # inside this, consider ourselves on course.
                              # friction, not a stationary alignment, and
                              # demanding more just burns ticks micro-turning.
 
+MAX_STALE_TICKS = 3          # consecutive unmatched frames before the gyro's
+                             # accumulated heading is treated as expired.
+                             # Coasting through one or two is worth it — a
+                             # single bad frame during an otherwise good turn
+                             # should not throw the course away — but the
+                             # accumulator has no way to catch up on the
+                             # rotation it missed, so the error is permanent
+                             # and grows with every tick spent pretending
+                             # otherwise. Better to admit UNKNOWN and let
+                             # CourseLock re-anchor when the view comes back.
+
 MAX_CORRECTION_DEG = 35.0    # never ask for a bearing further off than this.
                              # The correction is a PREFERENCE among gaps, and
                              # asking for something outside the scan's fan
@@ -181,11 +192,20 @@ class CourseKeeper:
             return locked
 
         self.lock_used = False
-        if self._gyro.lost_frames > 0:
-            # The accumulator has not been updated this tick, so it is
-            # stale rather than merely imprecise. Still the best estimate
-            # available, but callers watching lock_used/state can tell.
-            return self._gyro.heading_deg
+        if self._gyro.lost_frames > MAX_STALE_TICKS:
+            # The accumulator has gone unupdated for long enough that it
+            # describes a pose the robot has since driven away from. It is
+            # not an imprecise heading, it is an OLD one, and steering on
+            # it is the "fabricated heading" this module's docstring
+            # promises never to act on. Report UNKNOWN and let the caller
+            # degrade to plain gap-following.
+            #
+            # This branch used to return heading_deg exactly like the line
+            # below it, i.e. it did nothing. That went unnoticed because
+            # the gyro almost never lost frames on synthetic scenes; the
+            # first live run sat on a frozen value for 15 consecutive
+            # ticks while steering hard on it.
+            return None
         return self._gyro.heading_deg
 
     # ── Per-tick ─────────────────────────────────────────────────────────

@@ -154,6 +154,34 @@ MIN_PEAK_PROMINENCE = 1.35  # best score must beat the best WELL-SEPARATED
 
 PROMINENCE_EXCLUSION = 0.05  # rivals within this fraction of the width of the
                         # peak are part of the same lobe, not competitors.
+                        #
+                        # KNOWN WRONG for VisualGyro, deliberately left alone
+                        # for now. Consecutive frames are nearly identical, so
+                        # their correlation curve is broad and flat-topped —
+                        # far wider than 0.05 — and the "best well-separated
+                        # rival" is still on the peak's own lobe. Prominence
+                        # comes out at 1.01-1.09 for matches scoring 0.999, so
+                        # this gate throws them away: measured live, 131 of 152
+                        # inter-frame readings rejected, whose error against
+                        # ground truth averaged 0.43 deg versus 0.41 deg for
+                        # the ones it kept. It is not separating good from bad,
+                        # it is separating broad peaks from narrow ones.
+                        #
+                        # The obvious fix — derive the lobe width from the
+                        # curve instead of assuming it — was tried and made
+                        # things WORSE overall: with no rival left outside a
+                        # broad lobe, prominence goes to infinity, and a
+                        # FEATURELESS view (which correlates with itself at
+                        # 0.998 no matter how far the robot turned) sails
+                        # through as a confident 0.0 deg. Rejecting too much is
+                        # the safer failure while that is unresolved, per this
+                        # module's own rule that a missing heading beats a
+                        # wrong one.
+                        #
+                        # Do not retune against the current test scene: it has
+                        # no visual features across roughly half its headings,
+                        # so the measurements are degenerate. Fix the scene
+                        # first, then revisit with honest data.
 
 MAX_SHIFT_FRACTION = 0.45   # widest shift searched, as a fraction of image
                         # width. Beyond this the two views barely overlap and
@@ -165,6 +193,32 @@ MAX_SHIFT_FRACTION = 0.45   # widest shift searched, as a fraction of image
                         # scenery left to match at all. Larger rotations are
                         # VisualGyro's job (each frame-to-frame step is tiny);
                         # CourseLock only has to finish the finalapproach.
+RAIL_MARGIN_BINS = 1    # reject peaks landing this close to the edge of the
+                        # searched span. NOT a tuning knob — it closes a hole
+                        # neither gate above can see.
+                        #
+                        # _best_shift only searches [-max_shift, +max_shift].
+                        # If the true alignment lies beyond that, the argmax
+                        # gets pinned AT the boundary, and a boundary peak is
+                        # indistinguishable from a real one: it is one-sided,
+                        # so the excluded-rival set that MIN_PEAK_PROMINENCE
+                        # divides by contains only the far tail, and the ratio
+                        # comes out high. The score survives too, because the
+                        # smallest overlap is also the easiest to match by
+                        # accident.
+                        #
+                        # This is not theoretical. The first live
+                        # course-keeping run had VisualGyro accumulating in
+                        # steps of exactly +28.0 deg — max_shift * deg_per_bin
+                        # to three figures — through both gates, and course
+                        # keeping steered confidently on the total. A peak on
+                        # the boundary does not mean "the answer is exactly
+                        # 28 deg", it means "the answer is 28 deg OR MORE, and
+                        # I cannot tell which", so the only honest report is
+                        # None. Rejecting the adjacent bin too, because
+                        # parabolic refinement needs a neighbour on each side
+                        # and silently skips at the edge.
+
 FAR_FIELD_MARGIN = 0.15  # how far BELOW the horizon to keep reading, as a
                         # fraction of image height. Content just under the
                         # horizon is still distant, and the sim's sky is often
@@ -355,6 +409,13 @@ def yaw_between(ref_sig: np.ndarray, live_sig: np.ndarray,
     shift, score, prominence = _best_shift(ref_sig, live_sig, max_shift)
     if shift is None:
         return None
+    # Railed against the edge of the search window: the correlator ran out
+    # of room, so this is a lower bound rather than a measurement. Checked
+    # BEFORE the score gates because it is a structural fact about where
+    # the peak landed, not a question of how good it looks — and a railed
+    # peak looks good (see RAIL_MARGIN_BINS).
+    if abs(shift) >= max_shift - RAIL_MARGIN_BINS:
+        return None
     # Both gates, deliberately. The absolute score catches a featureless
     # view; the prominence ratio catches an out-of-range or aliased match,
     # which can score respectably while meaning nothing.
@@ -369,9 +430,15 @@ def measurable_range_deg(geom=None, width: int = None) -> float:
     this the two views no longer overlap enough to align and both
     yaw_between() and CourseLock.error_deg() return None rather than a
     number — deliberately, since the alternative is a confident lie.
+
+    Excludes the boundary bins RAIL_MARGIN_BINS rejects, so this stays the
+    range that can actually be MEASURED rather than merely searched. The
+    difference is a fraction of a degree, but reporting the searched span
+    here would document a capability the function refuses to deliver.
     """
     w = width if width is not None else (geom.width if geom else 640)
-    return int(w * MAX_SHIFT_FRACTION) * degrees_per_bin(geom, w)
+    usable = max(0, int(w * MAX_SHIFT_FRACTION) - RAIL_MARGIN_BINS)
+    return usable * degrees_per_bin(geom, w)
 
 
 # ─── Continuous estimate ─────────────────────────────────────────────────────
@@ -406,6 +473,11 @@ class VisualGyro:
         guessed at — a gap in the record is recoverable, an invented delta
         is not. Callers should watch lost_frames: a run of them means the
         accumulated heading is quietly going stale.
+
+        Tracking resumes on the very next frame: a failed match still
+        re-baselines the reference, so the damage is a permanent OFFSET in
+        the accumulated total, never a permanent loss of the ability to
+        measure. Closing that offset is CourseLock's job.
         """
         sig = column_signature(frame_rgb, self.geom, self.band)
         if sig is None:
@@ -421,6 +493,19 @@ class VisualGyro:
                             degrees_per_bin(self.geom, frame_rgb.shape[1]))
         if delta is None:
             self.lost_frames += 1
+            # Re-baseline onto the frame we could not match FROM. The
+            # rotation across this step is gone for good — that is what
+            # lost_frames exists to announce — but keeping the old
+            # reference would compare the next frame against an
+            # ever-more-distant view, so a single unmeasurable step
+            # becomes a permanent blackout instead of a one-tick gap.
+            #
+            # Measured: one 54 deg jump used to silence the gyro for the
+            # whole remaining run even though every later step was 2 deg.
+            # In the first graded live run that was 133 of 164 ticks with
+            # no heading at all, which reads as "course keeping is off"
+            # rather than as a failure.
+            self._prev_sig = sig
             return None
 
         self.heading_deg += delta
