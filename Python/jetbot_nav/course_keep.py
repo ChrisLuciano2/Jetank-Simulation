@@ -69,6 +69,13 @@ TESTING
 import math
 import time
 
+
+def _wrap180(deg: float) -> float:
+    """Signed angle in (-180, 180]. The gyro's accumulated heading is not
+    bounded, so a raw subtraction against a wrapped reading can make two
+    headings 17 deg apart look 343 deg apart."""
+    return (deg + 180.0) % 360.0 - 180.0
+
 from jetbot_nav.gap_follow import (
     FORWARD, SEARCH, BACKUP, PIVOT, MAX_SPEED,
 )
@@ -87,6 +94,72 @@ COURSE_TOLERANCE_DEG = 5.0   # inside this, consider ourselves on course.
                              # this is a moving robot with skid-steer yaw
                              # friction, not a stationary alignment, and
                              # demanding more just burns ticks micro-turning.
+
+# ─── Trusting a drift-free reading ───────────────────────────────────────────
+#
+# CourseLock is the anchor: its error cannot accumulate, so when it answers
+# its number replaces the gyro's running total outright. That is right when
+# the reading is right, and it is how a single WRONG reading does more
+# damage than anything else in this module — measured live, one bad lock at
+# tick 144 of a drive moved the accumulated heading 73 deg the wrong way in
+# a single step, and nothing afterwards could tell that it had happened.
+#
+# The gyro is the only second opinion available, and it is a good one over
+# SHORT spans: about 0.7 deg of error per tick, drifting maybe a quarter of
+# a degree per tick net. So a lock reading gets checked against it before
+# being believed.
+#
+# The tolerance has to GROW with time since the last anchor, which is the
+# whole difficulty. Correcting drift is the lock's job, so disagreement is
+# expected and gets larger the longer the gyro has run unanchored — a fixed
+# window would either reject genuine corrections or keep admitting the bad
+# ones. Growing it means the check is tight exactly when the gyro is
+# trustworthy and loose when it is not.
+
+ANCHOR_TOLERANCE_BASE_DEG = 12.0   # disagreement allowed immediately after an
+                                   # anchor, when the gyro has barely run.
+
+ANCHOR_DRIFT_PER_TICK_DEG = 0.35   # how much further apart they are allowed to
+                                   # drift per unanchored tick. Above the ~0.25
+                                   # measured, deliberately: this is a
+                                   # plausibility bound, and being too strict
+                                   # rejects the corrections that keep the
+                                   # course honest.
+
+ANCHOR_TOLERANCE_MAX_DEG = 60.0    # never stretch further than this, or the
+                                   # check stops being one.
+
+# A disagreement does not prove the LOCK is wrong — the gyro may be the one
+# that has come adrift, and then rejecting every correction would strand the
+# robot on a heading it invented. So a persistent, self-consistent
+# disagreement is believed after all.
+ANCHOR_CONFIRM_TICKS = 3           # consecutive outlying readings needed
+ANCHOR_CONFIRM_SPREAD_DEG = 8.0    # and how closely they must agree with each
+                                   # other to count as corroboration rather
+                                   # than noise
+
+ANCHOR_CONFIRM_MIN_TICKS = 30      # ...and the gyro must have run at least this
+                                   # long unanchored before corroboration is
+                                   # allowed to overrule it.
+                                   #
+                                   # Without this the escape hatch defeats the
+                                   # guard. CourseLock's failure once the robot
+                                   # has driven away from its reference photo
+                                   # is not noise — the view genuinely no
+                                   # longer matches, so correlation settles on
+                                   # the same wrong alignment every time, and a
+                                   # systematically wrong reading CORROBORATES
+                                   # ITSELF. Measured: a 46 deg error walked
+                                   # straight through three consistent
+                                   # readings.
+                                   #
+                                   # Consistency is not correctness. Requiring
+                                   # the gyro to have been running long enough
+                                   # for drift to be a plausible explanation is
+                                   # what makes the override mean something: a
+                                   # gyro anchored three ticks ago has not
+                                   # drifted 46 deg, so a lock claiming it has
+                                   # is wrong however firmly it insists.
 
 MAX_STALE_TICKS = 3          # consecutive unmatched frames before the gyro's
                              # accumulated heading is treated as expired.
@@ -129,10 +202,14 @@ class CourseKeeper:
         self.state = UNKNOWN
         self.course_error_deg = None    # + means pointing RIGHT of course
         self.lock_used = False          # did the drift-free source answer?
+        self.anchors_refused = 0        # lock readings the gyro contradicted
 
         self._gyro = None
         self._lock = None
         self._armed = False
+        self._ticks_since_anchor = 0
+        self._disputed = []             # recent refused readings, for the
+                                        # corroboration rule
 
     # ── Course management ────────────────────────────────────────────────
 
@@ -169,6 +246,42 @@ class CourseKeeper:
 
     # ── Heading estimation ───────────────────────────────────────────────
 
+    def _believable_anchor(self, locked: float) -> bool:
+        """
+        Should this drift-free reading replace the accumulated heading?
+
+        Yes if the gyro roughly agrees, within a window that widens the
+        longer the gyro has run unanchored. Yes anyway if several
+        consecutive readings have disagreed in the SAME place, since that
+        is the signature of a gyro that has come adrift rather than of a
+        bad match. No otherwise — and "no" only costs this one correction,
+        because the gyro keeps running and the next reading gets its own
+        hearing.
+        """
+        gap = abs(_wrap180(locked - self._gyro.heading_deg))
+        tolerance = min(
+            ANCHOR_TOLERANCE_BASE_DEG
+            + ANCHOR_DRIFT_PER_TICK_DEG * self._ticks_since_anchor,
+            ANCHOR_TOLERANCE_MAX_DEG)
+
+        if gap <= tolerance:
+            self._disputed = []
+            return True
+
+        # Outlier. Keep it: if the next few agree with it AND the gyro has
+        # run long enough for drift to explain the gap, the gyro is the one
+        # that is wrong and this becomes the correction that rescues it.
+        self._disputed.append(locked)
+        recent = self._disputed[-ANCHOR_CONFIRM_TICKS:]
+        if (self._ticks_since_anchor >= ANCHOR_CONFIRM_MIN_TICKS
+                and len(recent) >= ANCHOR_CONFIRM_TICKS
+                and max(recent) - min(recent) <= ANCHOR_CONFIRM_SPREAD_DEG):
+            self._disputed = []
+            return True
+
+        self.anchors_refused += 1
+        return False
+
     def _measure(self, frame, heading_deg, depth=None):
         """Course error in degrees (+ = right of course), or None."""
         if heading_deg is not None:
@@ -182,12 +295,16 @@ class CourseKeeper:
         # skipping it would leave a gap in the accumulator the moment the
         # lock loses sight of the reference view.
         self._gyro.update(frame, depth=depth)
+        self._ticks_since_anchor += 1
 
         locked = self._lock.error_deg(frame, depth=depth)
-        if locked is not None:
-            # Drift-free reading available — re-anchor the accumulator to
-            # it. This is the entire point of running both sources.
+        if locked is not None and self._believable_anchor(locked):
+            # Drift-free reading, and the gyro does not contradict it —
+            # re-anchor the accumulator. This is the entire point of
+            # running both sources, and the check above is what stops one
+            # bad match from rewriting the heading in a single step.
             self._gyro.heading_deg = locked
+            self._ticks_since_anchor = 0
             self.lock_used = True
             return locked
 
@@ -255,6 +372,7 @@ class CourseKeeper:
             "course_error_deg": (None if self.course_error_deg is None
                                  else round(self.course_error_deg, 2)),
             "drift_free": self.lock_used,
+            "anchors_refused": self.anchors_refused,
         })
         return d
 

@@ -232,6 +232,92 @@ check("emergency recovery actually engaged (otherwise nothing was tested)",
       f"state was {keeper_r.controller.state}")
 
 
+# ─── Guarding the drift-free anchor ─────────────────────────────────────────
+# A CourseLock reading replaces the accumulated heading outright, so one
+# bad reading is the single most damaging thing that can happen here.
+# Measured live before this guard: one bad lock at tick 144 of a drive
+# moved the heading 73 deg the wrong way in one step, and nothing
+# afterwards could tell it had happened.
+
+from jetbot_nav.course_keep import (
+    ANCHOR_TOLERANCE_BASE_DEG, ANCHOR_DRIFT_PER_TICK_DEG,
+    ANCHOR_TOLERANCE_MAX_DEG, ANCHOR_CONFIRM_TICKS, ANCHOR_CONFIRM_SPREAD_DEG,
+    ANCHOR_CONFIRM_MIN_TICKS,
+    _wrap180,
+)
+
+
+class _FakeGyro:
+    def __init__(self, heading):
+        self.heading_deg = heading
+        self.lost_frames = 0
+
+
+def _anchor_keeper(gyro_heading, ticks_since_anchor=0):
+    k = CourseKeeper()
+    k._gyro = _FakeGyro(gyro_heading)
+    k._ticks_since_anchor = ticks_since_anchor
+    return k
+
+
+check("a lock reading the gyro agrees with is adopted",
+      _anchor_keeper(10.0)._believable_anchor(12.0))
+
+check("a wildly contradicted lock reading is refused",
+      not _anchor_keeper(10.0)._believable_anchor(83.0))
+
+# The tolerance has to widen, or the lock could never correct real drift.
+_fresh = _anchor_keeper(0.0, ticks_since_anchor=0)
+_stale = _anchor_keeper(0.0, ticks_since_anchor=100)
+_mid = ANCHOR_TOLERANCE_BASE_DEG + 20.0
+check("a correction too large to trust when fresh is accepted once the "
+      "gyro has run a long way unanchored",
+      not _fresh._believable_anchor(_mid) and _stale._believable_anchor(_mid),
+      f"fresh {_fresh._believable_anchor(_mid)}, stale "
+      f"{_stale._believable_anchor(_mid)}")
+
+check("the widening tolerance is capped",
+      not _anchor_keeper(0.0, ticks_since_anchor=100000)
+      ._believable_anchor(ANCHOR_TOLERANCE_MAX_DEG + 5.0))
+
+# A persistently disagreeing lock means the GYRO is the one adrift, so the
+# guard must not lock the robot onto an invented heading forever.
+_k = _anchor_keeper(0.0, ticks_since_anchor=ANCHOR_CONFIRM_MIN_TICKS)
+_outcomes = [_k._believable_anchor(80.0) for _ in range(ANCHOR_CONFIRM_TICKS)]
+check("a self-consistent disagreement is believed after corroboration, once "
+      "the gyro has run long enough to have drifted",
+      _outcomes[-1] and not _outcomes[0],
+      f"got {_outcomes}")
+
+# The hole this closes: a CourseLock that has lost its reference view fails
+# the SAME way every time, so it corroborates itself. Consistency is only
+# evidence once drift is a plausible explanation for the gap.
+_fresh_k = _anchor_keeper(0.0, ticks_since_anchor=3)
+_fresh_outcomes = [_fresh_k._believable_anchor(80.0) for _ in range(8)]
+check("a freshly anchored gyro is not overruled by a self-consistent lock",
+      not any(_fresh_outcomes), f"got {_fresh_outcomes}")
+
+# ...but noisy disagreements are not corroboration.
+_k2 = _anchor_keeper(0.0)
+_noisy = [_k2._believable_anchor(v)
+          for v in (80.0, -95.0, 130.0, -60.0, 110.0)]
+check("scattered disagreements are not mistaken for corroboration",
+      not any(_noisy), f"got {_noisy}")
+
+check("refusals are counted so a caller can see them",
+      _k2.anchors_refused == len(_noisy), f"got {_k2.anchors_refused}")
+
+# Wrapping: an accumulated heading is unbounded, a lock reading is not.
+check("headings either side of the wrap are compared correctly",
+      _anchor_keeper(359.0)._believable_anchor(-3.0),
+      "358 deg and -3 deg are 2 deg apart, not 362")
+
+check("_wrap180 keeps the sign convention",
+      abs(_wrap180(350.0) - (-10.0)) < 1e-9
+      and abs(_wrap180(-350.0) - 10.0) < 1e-9,
+      f"{_wrap180(350.0)}, {_wrap180(-350.0)}")
+
+
 # ─── Summary ────────────────────────────────────────────────────────────────
 
 passed = sum(_results)
