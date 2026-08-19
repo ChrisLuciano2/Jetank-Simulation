@@ -66,6 +66,19 @@ public class ProximitySensor : MonoBehaviour
     // SimQueryServer background thread.
     private volatile float[] _scan;
 
+    // Robot pose in world space: x, y, z, yaw-degrees. Same publish-by-swap
+    // rule as _scan, and for the same reason - Unity transforms may only be
+    // touched on the main thread, so the query server reads this snapshot
+    // instead.
+    //
+    // This lives on ProximitySensor because it is the same KIND of thing: dev
+    // -only ground truth with no counterpart on the real JETANK, which has no
+    // encoders, no IMU and no way whatsoever to know where it is. Nothing in
+    // the deployment path may read it. It exists so a live navigation run can
+    // be graded against the truth rather than against the estimator's own
+    // opinion of itself.
+    private volatile float[] _pose;
+
     private void Awake()
     {
         if (Instance != null && Instance != this) { Destroy(this); return; }
@@ -74,6 +87,8 @@ public class ProximitySensor : MonoBehaviour
         var init = new float[rayCount];
         for (int i = 0; i < rayCount; i++) init[i] = maxRange;
         _scan = init;
+
+        _pose = PoseSnapshot();
     }
 
     private void OnValidate()
@@ -108,6 +123,19 @@ public class ProximitySensor : MonoBehaviour
             scan[i] = CastRay(origin, dir);
         }
         _scan = scan;                                   // atomic publish
+        _pose = PoseSnapshot();
+    }
+
+    /// <summary>
+    /// World pose as {x, y, z, yawDegrees}. Yaw is Unity's eulerAngles.y, so
+    /// it reads 0-360 exactly as the Inspector shows it; wrapping to a signed
+    /// range is left to the caller doing the comparison. Turning right
+    /// increases it, which already matches jetbot_nav's "positive = right".
+    /// </summary>
+    private float[] PoseSnapshot()
+    {
+        Vector3 p = transform.position;
+        return new float[] { p.x, p.y, p.z, transform.eulerAngles.y };
     }
 
     private float CastRay(Vector3 origin, Vector3 direction)
@@ -123,6 +151,13 @@ public class ProximitySensor : MonoBehaviour
 
     /// <summary>Full scan snapshot (background-thread safe).</summary>
     public float[] GetCachedScan() => _scan;
+
+    /// <summary>
+    /// World pose snapshot {x, y, z, yawDegrees} (background-thread safe).
+    /// Dev-only ground truth - see the _pose field for why nothing in the
+    /// deployment path may use this.
+    /// </summary>
+    public float[] GetCachedPose() => _pose;
 
     public float MaxRange => maxRange;
     public float ScanFovDegrees => scanFovDegrees;

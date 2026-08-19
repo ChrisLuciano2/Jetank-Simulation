@@ -148,6 +148,9 @@ namespace RobotSimulator.Communication
                     case "get_proximity_scan":
                         return HandleGetProximityScan();
 
+                    case "get_pose":
+                        return HandleGetPose();
+
                     default:
                         return $"{{\"status\":\"error\",\"message\":\"unknown query: {q.command}\"}}";
                 }
@@ -183,10 +186,45 @@ namespace RobotSimulator.Communication
             for (int i = 0; i < warnings.Length; i++)
             {
                 if (i > 0) sb.Append(",");
-                string esc = warnings[i].Replace("\\", "\\\\").Replace("\"", "\\\"");
-                sb.Append($"\"{esc}\"");
+                sb.Append($"\"{EscapeJson(warnings[i])}\"");
             }
             sb.Append("]}");
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Escape a string for embedding in a JSON string literal.
+        ///
+        /// Backslash and quote are the obvious ones; the CONTROL CHARACTERS
+        /// are the ones that actually bit. A raw newline is illegal inside a
+        /// JSON string, so a single multi-line warning produced
+        /// "Unterminated string" on the Python side and took the whole
+        /// response with it — every other warning in the same batch included.
+        /// Warnings are written by humans for humans and will contain
+        /// newlines sooner or later, so escape rather than forbid them.
+        /// </summary>
+        private static string EscapeJson(string s)
+        {
+            var sb = new System.Text.StringBuilder(s.Length + 16);
+            foreach (char c in s)
+            {
+                switch (c)
+                {
+                    case '\\': sb.Append("\\\\"); break;
+                    case '"':  sb.Append("\\\""); break;
+                    case '\n': sb.Append("\\n");  break;
+                    case '\r': sb.Append("\\r");  break;
+                    case '\t': sb.Append("\\t");  break;
+                    case '\b': sb.Append("\\b");  break;
+                    case '\f': sb.Append("\\f");  break;
+                    default:
+                        if (c < 0x20)
+                            sb.Append("\\u").Append(((int)c).ToString("x4"));
+                        else
+                            sb.Append(c);
+                        break;
+                }
+            }
             return sb.ToString();
         }
 
@@ -232,6 +270,41 @@ namespace RobotSimulator.Communication
                 sb.Append(scan[i].ToString("F2", ic));
             }
             sb.Append("]}");
+            return sb.ToString();
+        }
+
+        // ── Pose query ────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Ground-truth robot pose. DEV ONLY: the real JETANK cannot answer
+        /// this about itself, so anything in the deployment path that reads it
+        /// is cheating and will not survive contact with hardware. It exists
+        /// so a live navigation run can be scored against the truth instead of
+        /// against the heading estimator's own opinion of itself.
+        /// </summary>
+        private string HandleGetPose()
+        {
+            if (ProximitySensor.Instance == null)
+                return "{\"status\":\"error\",\"message\":\"ProximitySensor not found\"}";
+
+            float[] p = ProximitySensor.Instance.GetCachedPose();
+            if (p == null || p.Length < 4)
+                return "{\"status\":\"error\",\"message\":\"no pose available yet\"}";
+
+            // InvariantCulture for the same reason as the scan above: a
+            // comma-decimal locale would emit "3,50" and break Python's parse.
+            var ic = System.Globalization.CultureInfo.InvariantCulture;
+
+            var sb = new System.Text.StringBuilder();
+            sb.Append("{\"status\":\"ok\",\"x\":");
+            sb.Append(p[0].ToString("F4", ic));
+            sb.Append(",\"y\":");
+            sb.Append(p[1].ToString("F4", ic));
+            sb.Append(",\"z\":");
+            sb.Append(p[2].ToString("F4", ic));
+            sb.Append(",\"yaw_deg\":");
+            sb.Append(p[3].ToString("F4", ic));
+            sb.Append("}");
             return sb.ToString();
         }
 
