@@ -170,7 +170,12 @@ print("heading source   :", histogram("src"))
 
 measured = [t for t in ticks if t["est"] is not None]
 if measured:
-    devs = [abs(t["est"] - t["true"]) for t in measured]
+    # Wrap the comparison. The estimator's heading is an ACCUMULATED total
+    # and is not bounded to +/-180, while the truth is wrapped, so a robot
+    # sitting 17 deg off course can read as -163 against +179 and score a
+    # 343 deg error. That is a defect in the ruler, not the thing measured,
+    # and it inflated a whole run's numbers before it was spotted.
+    devs = [abs(sim_truth.yaw_error(t["est"], t["true"])) for t in measured]
     worst = max(devs)
     print(f"\nestimator vs truth: mean {sum(devs) / len(devs):.2f} deg, "
           f"worst {worst:.2f} deg, over {len(measured)}/{len(ticks)} ticks "
@@ -189,7 +194,7 @@ print(f"  travelled     : {forward:+.2f} forward, {lateral:+.2f} lateral")
 # honest", because a run can pass one and fail the other and they need
 # different fixes.
 ok_course = abs(final_err) <= 10.0
-ok_honest = (not measured) or max(abs(t["est"] - t["true"])
+ok_honest = (not measured) or max(abs(sim_truth.yaw_error(t["est"], t["true"]))
                                   for t in measured) <= 10.0
 print(f"\n  held course (|err| <= 10 deg)      : "
       f"{'PASS' if ok_course else 'FAIL'}")

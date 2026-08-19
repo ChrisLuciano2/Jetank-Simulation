@@ -510,6 +510,68 @@ check("an offset geometry with no depth behaves exactly as before",
       f"nodepth {_g_nodepth.heading_deg:.4f} raw {_g_raw.heading_deg:.4f}")
 
 
+# ─── 6g. The frame-to-frame prominence threshold, against MEASURED values ───
+# VisualGyro compares consecutive, nearly identical frames; CourseLock
+# compares against a photo taken degrees away. The first produces a broad,
+# flat-topped correlation peak and so far less prominence for an equally
+# good match, which is why they cannot share a threshold. Judged by
+# CourseLock's 1.35, a live drive rejected 49 of 130 ticks and lost 132 deg
+# of real rotation — permanently, since the gyro integrates.
+#
+# Same standard as the CourseLock table above: rows marked accept=True are
+# correct measurements that MUST get through, accept=False are wrong ones
+# that MUST be rejected. All measured against Unity ground truth on a
+# textured scene.
+
+from jetbot_nav.heading import GYRO_MIN_PEAK_PROMINENCE
+
+GYRO_GATE_TABLE = [
+    # (prominence, accept, source)
+    (1.015, False, "nose to wall, true +5.0 -> read +0.0"),
+    (1.020, False, "nose to wall, true +5.0 -> read +0.03"),
+    (1.020, False, "nose to wall, true -5.0 -> read -0.70"),
+    (1.028, False, "nose to wall, true +5.0 -> read +1.73"),
+    (1.040, False, "nose to wall, true +5.0 -> read +13.61"),
+    (1.060, True,  "driving, accurate (rejected at 1.35)"),
+    (1.160, True,  "driving, true +4.53 -> read +3.46"),
+    (1.310, True,  "driving, true +3.10 -> read +5.12"),
+    (1.340, True,  "driving, accurate (rejected at 1.35)"),
+    (1.380, True,  "driving, accepted even at 1.35"),
+    (1.720, True,  "static textured, true +5.0 -> read +5.13"),
+    (6.530, True,  "static textured, true +5.0 -> read +5.15"),
+]
+
+_wrong = []
+for prom, want, source in GYRO_GATE_TABLE:
+    if (prom >= GYRO_MIN_PEAK_PROMINENCE) != want:
+        _wrong.append(f"{source}: prominence {prom} -> "
+                      f"{'wrongly accepted' if not want else 'wrongly rejected'}")
+check("frame-to-frame threshold accepts every measured-correct match and "
+      "rejects every measured-wrong one", not _wrong, "; ".join(_wrong))
+
+_gyro_good = min(p for p, a, _ in GYRO_GATE_TABLE if a)
+_gyro_bad = max(p for p, a, _ in GYRO_GATE_TABLE if not a)
+check("frame-to-frame threshold sits in the gap, not on top of a population",
+      _gyro_bad < GYRO_MIN_PEAK_PROMINENCE < _gyro_good,
+      f"worst accepted {_gyro_good}, best reject {_gyro_bad}, "
+      f"threshold {GYRO_MIN_PEAK_PROMINENCE}")
+
+# The two regimes must stay separate. Collapsing them back to one number
+# is the change this table exists to prevent, in either direction.
+check("the frame-to-frame threshold is below CourseLock's",
+      GYRO_MIN_PEAK_PROMINENCE < MIN_PEAK_PROMINENCE,
+      f"gyro {GYRO_MIN_PEAK_PROMINENCE}, lock {MIN_PEAK_PROMINENCE}")
+check("CourseLock's threshold is unchanged by the split",
+      MIN_PEAK_PROMINENCE == 1.35, f"got {MIN_PEAK_PROMINENCE}")
+
+# And the split must actually be wired up: a match good enough for the gyro
+# but not for the lock has to be accepted by one and refused by the other.
+_mid = (GYRO_MIN_PEAK_PROMINENCE + MIN_PEAK_PROMINENCE) / 2.0
+check("a mid-prominence match passes the gyro's bar but not CourseLock's",
+      GYRO_MIN_PEAK_PROMINENCE <= _mid < MIN_PEAK_PROMINENCE,
+      f"mid {_mid}")
+
+
 # ─── 7. Works without a CameraGeometry (hardware default lens) ──────────────
 
 plain = CourseLock(None)

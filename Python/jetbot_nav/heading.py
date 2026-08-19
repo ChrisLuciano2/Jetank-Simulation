@@ -155,33 +155,59 @@ MIN_PEAK_PROMINENCE = 1.35  # best score must beat the best WELL-SEPARATED
 PROMINENCE_EXCLUSION = 0.05  # rivals within this fraction of the width of the
                         # peak are part of the same lobe, not competitors.
                         #
-                        # KNOWN WRONG for VisualGyro, deliberately left alone
-                        # for now. Consecutive frames are nearly identical, so
-                        # their correlation curve is broad and flat-topped —
-                        # far wider than 0.05 — and the "best well-separated
-                        # rival" is still on the peak's own lobe. Prominence
-                        # comes out at 1.01-1.09 for matches scoring 0.999, so
-                        # this gate throws them away: measured live, 131 of 152
-                        # inter-frame readings rejected, whose error against
-                        # ground truth averaged 0.43 deg versus 0.41 deg for
-                        # the ones it kept. It is not separating good from bad,
-                        # it is separating broad peaks from narrow ones.
-                        #
-                        # The obvious fix — derive the lobe width from the
-                        # curve instead of assuming it — was tried and made
-                        # things WORSE overall: with no rival left outside a
+                        # Deriving this from the curve instead of fixing it was
+                        # tried and is a trap: with no rival left outside a
                         # broad lobe, prominence goes to infinity, and a
-                        # FEATURELESS view (which correlates with itself at
-                        # 0.998 no matter how far the robot turned) sails
-                        # through as a confident 0.0 deg. Rejecting too much is
-                        # the safer failure while that is unresolved, per this
-                        # module's own rule that a missing heading beats a
-                        # wrong one.
+                        # featureless view — which correlates with itself at
+                        # 0.998 however far the robot turned — sails through as
+                        # a confident 0.0 deg. The regime difference it was
+                        # meant to solve is handled by the two thresholds
+                        # below instead.
+
+GYRO_MIN_PEAK_PROMINENCE = 1.05  # prominence floor for FRAME-TO-FRAME matches.
+                        # Much lower than MIN_PEAK_PROMINENCE because the two
+                        # comparisons are not alike. CourseLock matches against
+                        # a photo taken degrees away, giving a sharp peak.
+                        # VisualGyro matches consecutive frames that are nearly
+                        # identical, and a near-identical pair has a broad,
+                        # flat-topped correlation curve whose best
+                        # well-separated rival still sits on the peak's own
+                        # lobe. The same reading is therefore worth far less
+                        # prominence here, and judging it by CourseLock's
+                        # standard threw away most of the good data.
                         #
-                        # Do not retune against the current test scene: it has
-                        # no visual features across roughly half its headings,
-                        # so the measurements are degenerate. Fix the scene
-                        # first, then revisit with honest data.
+                        # The cost of over-rejecting is also different, which
+                        # is what makes this worth splitting. A rejected
+                        # CourseLock reading is free: try again next tick,
+                        # nothing accumulates. A rejected gyro reading is a
+                        # PERMANENT hole in the accumulated total, exactly as
+                        # unrecoverable as a wrong one. At 1.35 that cost was
+                        # 49 of 130 ticks rejected on a live drive, discarding
+                        # 132 deg of real rotation in 25 seconds.
+                        #
+                        # Both populations measured against Unity ground truth
+                        # on a textured scene, 5 deg turns unless noted:
+                        #
+                        #   WRONG   (nose to a wall, one texture band filling
+                        #            the frame; errors 3.3-8.6 deg)
+                        #            n=63   prominence 1.015 - 1.04
+                        #   CORRECT (while driving; mean error 0.59 deg)
+                        #            n=41   prominence 1.06  - 1.34
+                        #   CORRECT (while driving, already accepted at 1.35)
+                        #            n=99   prominence 1.38  - 11.35
+                        #   CORRECT (static, textured; errors 0.10-0.30 deg)
+                        #            n=8    prominence 1.72  - 6.53
+                        #
+                        # 1.05 sits in the gap between 1.04 and 1.06 rather
+                        # than on top of either group, which is the same
+                        # standard MIN_PEAK_PROMINENCE is held to. Be honest
+                        # about the margin though: it is 0.01 either side,
+                        # far tighter than the gap CourseLock's threshold
+                        # enjoys. It rests on the wrong population being
+                        # tightly clustered — 63 samples spanning 0.013 — not
+                        # on comfortable separation. Re-measure both
+                        # populations before moving it, and do not tune it
+                        # against a scene with untextured walls.
 
 MAX_SHIFT_FRACTION = 0.45   # widest shift searched, as a fraction of image
                         # width. Beyond this the two views barely overlap and
@@ -382,7 +408,8 @@ def _best_shift(ref: np.ndarray, live: np.ndarray, max_shift: int):
 
 
 def yaw_between(ref_sig: np.ndarray, live_sig: np.ndarray,
-                deg_per_bin: float, max_shift: int = None):
+                deg_per_bin: float, max_shift: int = None,
+                min_prominence: float = None):
     """
     Yaw change in DEGREES that carries the reference view to the live view,
     or None if the match is not trustworthy.
@@ -419,7 +446,14 @@ def yaw_between(ref_sig: np.ndarray, live_sig: np.ndarray,
     # Both gates, deliberately. The absolute score catches a featureless
     # view; the prominence ratio catches an out-of-range or aliased match,
     # which can score respectably while meaning nothing.
-    if score < MIN_CONFIDENCE or prominence < MIN_PEAK_PROMINENCE:
+    #
+    # The prominence bar depends on WHAT is being compared, not on how
+    # much risk the caller feels like taking: a near-identical pair of
+    # consecutive frames cannot produce the peak sharpness that a
+    # reference photo taken degrees away does. See
+    # GYRO_MIN_PEAK_PROMINENCE.
+    floor = MIN_PEAK_PROMINENCE if min_prominence is None else min_prominence
+    if score < MIN_CONFIDENCE or prominence < floor:
         return None
     return shift * deg_per_bin
 
@@ -538,7 +572,8 @@ class VisualGyro:
             return 0.0
 
         delta = yaw_between(self._prev_sig, sig,
-                            degrees_per_bin(self.geom, frame_rgb.shape[1]))
+                            degrees_per_bin(self.geom, frame_rgb.shape[1]),
+                            min_prominence=GYRO_MIN_PEAK_PROMINENCE)
         if delta is None:
             self.lost_frames += 1
             # Re-baseline onto the frame we could not match FROM. The
