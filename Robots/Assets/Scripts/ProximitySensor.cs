@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿using System.Collections.Generic;
+using UnityEngine;
 
 /// <summary>
 /// ProximitySensor - DEVELOPMENT GROUND TRUTH ONLY. Not a deployment path.
@@ -60,6 +61,22 @@ public class ProximitySensor : MonoBehaviour
     private const float MIN_USEFUL_FOV = 120f;
     private const int MIN_USEFUL_RAY_COUNT = 13;
 
+    [Header("Robot Identity")]
+    [Tooltip("Matches the owning robot's TruckController robotId, e.g. \"truck_01\". " +
+             "SimQueryServer routes get_proximity_scan/get_pose to this sensor by that id.")]
+    [SerializeField] private string robotId = "truck_01";
+
+    // Per-robot registry — see the matching comment in SimCamera.cs. Same
+    // bug, same fix: the old single Instance meant only the first robot's
+    // ProximitySensor survived Awake(), so get_pose (dev-only ground truth,
+    // used to validate visual_scan in sim) silently answered for the wrong
+    // robot once a second one was added.
+    private static readonly Dictionary<string, ProximitySensor> _byRobotId = new Dictionary<string, ProximitySensor>();
+
+    public static ProximitySensor Get(string robotId) =>
+        _byRobotId.TryGetValue(robotId ?? "", out var s) ? s : null;
+
+    /// <summary>Back-compat single-robot accessor: the first sensor registered. Prefer Get(robotId).</summary>
     public static ProximitySensor Instance { get; private set; }
 
     // Republished by reference swap each frame - safe to read from the
@@ -81,14 +98,30 @@ public class ProximitySensor : MonoBehaviour
 
     private void Awake()
     {
-        if (Instance != null && Instance != this) { Destroy(this); return; }
-        Instance = this;
+        if (_byRobotId.ContainsKey(robotId))
+        {
+            Debug.LogError($"[ProximitySensor] Duplicate robotId '{robotId}' — this sensor will " +
+                            "not be reachable by get_proximity_scan/get_pose. Give each robot's " +
+                            "ProximitySensor a unique robotId matching its TruckController.");
+        }
+        else
+        {
+            _byRobotId[robotId] = this;
+        }
+        if (Instance == null) Instance = this;   // first-registered wins, for back-compat callers
 
         var init = new float[rayCount];
         for (int i = 0; i < rayCount; i++) init[i] = maxRange;
         _scan = init;
 
         _pose = PoseSnapshot();
+    }
+
+    private void OnDestroy()
+    {
+        if (_byRobotId.TryGetValue(robotId, out var mine) && mine == this)
+            _byRobotId.Remove(robotId);
+        if (Instance == this) Instance = null;
     }
 
     private void OnValidate()

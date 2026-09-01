@@ -134,22 +134,38 @@ namespace RobotSimulator.Communication
                 if (q == null || q.command == null)
                     return "{\"status\":\"error\",\"message\":\"invalid json\"}";
 
+                // Empty/missing robot_id defaults to "truck_01" — keeps every
+                // existing single-robot script and test working unchanged.
+                string robotId = string.IsNullOrEmpty(q.robot_id) ? "truck_01" : q.robot_id;
+
                 switch (q.command)
                 {
                     case "get_frame":
-                        return HandleGetFrame();
+                        return HandleGetFrame(robotId);
 
                     case "detect_objects":
-                        return HandleDetectObjects();
+                        return HandleDetectObjects(robotId);
 
                     case "get_safety_warnings":
                         return HandleGetSafetyWarnings();
 
                     case "get_proximity_scan":
-                        return HandleGetProximityScan();
+                        return HandleGetProximityScan(robotId);
 
                     case "get_pose":
-                        return HandleGetPose();
+                        return HandleGetPose(robotId);
+
+                    case "get_block_pose":
+                        // Dev-only ground truth for a GraspableBlock, keyed by its
+                        // blockId (e.g. "block_A_large") -- see GraspableBlock.cs.
+                        return HandleGetBlockPose(q.block_id);
+
+                    case "get_arm_state":
+                        // Arm queries use their own id convention ("arm_01"/"arm_02"),
+                        // separate from the chassis's "truck_01"/"truck_02" — the
+                        // caller must pass the arm's robot_id explicitly here rather
+                        // than relying on the truck_01 default above.
+                        return HandleGetArmState(q.robot_id);
 
                     default:
                         return $"{{\"status\":\"error\",\"message\":\"unknown query: {q.command}\"}}";
@@ -163,12 +179,13 @@ namespace RobotSimulator.Communication
 
         // ── Frame query ───────────────────────────────────────────────────────
 
-        private string HandleGetFrame()
+        private string HandleGetFrame(string robotId)
         {
-            if (SimCamera.Instance == null)
-                return "{\"status\":\"error\",\"message\":\"SimCamera not found\"}";
+            SimCamera cam = SimCamera.Get(robotId);
+            if (cam == null)
+                return $"{{\"status\":\"error\",\"message\":\"no SimCamera registered for robot_id '{robotId}'\"}}";
 
-            string b64 = SimCamera.Instance.GetCachedFrameBase64();
+            string b64 = cam.GetCachedFrameBase64();
             if (b64 == null)
                 return "{\"status\":\"error\",\"message\":\"no frame available yet\"}";
 
@@ -230,24 +247,26 @@ namespace RobotSimulator.Communication
 
         // ── Detection query ───────────────────────────────────────────────────
 
-        private string HandleDetectObjects()
+        private string HandleDetectObjects(string robotId)
         {
-            if (SimCamera.Instance == null)
+            SimCamera cam = SimCamera.Get(robotId);
+            if (cam == null)
                 return "{\"status\":\"ok\",\"objects\":[]}";
 
-            return SimCamera.Instance.GetCachedDetectionsJson();
+            return cam.GetCachedDetectionsJson();
         }
 
         // ── Proximity query ───────────────────────────────────────────────────
 
-        private string HandleGetProximityScan()
+        private string HandleGetProximityScan(string robotId)
         {
-            if (ProximitySensor.Instance == null)
-                return "{\"status\":\"error\",\"message\":\"ProximitySensor not found\"}";
+            ProximitySensor sensor = ProximitySensor.Get(robotId);
+            if (sensor == null)
+                return $"{{\"status\":\"error\",\"message\":\"no ProximitySensor registered for robot_id '{robotId}'\"}}";
 
-            float[] scan     = ProximitySensor.Instance.GetCachedScan();
-            float   fov      = ProximitySensor.Instance.ScanFovDegrees;
-            float   maxRange = ProximitySensor.Instance.MaxRange;
+            float[] scan     = sensor.GetCachedScan();
+            float   fov      = sensor.ScanFovDegrees;
+            float   maxRange = sensor.MaxRange;
 
             // InvariantCulture matters: a machine set to a comma-decimal
             // locale would otherwise emit "3,50" and break Python's parse.
@@ -282,12 +301,26 @@ namespace RobotSimulator.Communication
         /// so a live navigation run can be scored against the truth instead of
         /// against the heading estimator's own opinion of itself.
         /// </summary>
-        private string HandleGetPose()
+        private string HandleGetBlockPose(string blockId)
         {
-            if (ProximitySensor.Instance == null)
-                return "{\"status\":\"error\",\"message\":\"ProximitySensor not found\"}";
+            GraspableBlock block = GraspableBlock.Get(blockId);
+            if (block == null)
+                return $"{{\"status\":\"error\",\"message\":\"no GraspableBlock registered for blockId '{blockId}'\"}}";
 
-            float[] p = ProximitySensor.Instance.GetCachedPose();
+            Vector3 p = block.GetCachedPosition();
+            var ic = System.Globalization.CultureInfo.InvariantCulture;
+            return "{\"status\":\"ok\",\"x\":" + p.x.ToString("F4", ic) +
+                   ",\"y\":" + p.y.ToString("F4", ic) +
+                   ",\"z\":" + p.z.ToString("F4", ic) + "}";
+        }
+
+        private string HandleGetPose(string robotId)
+        {
+            ProximitySensor sensor = ProximitySensor.Get(robotId);
+            if (sensor == null)
+                return $"{{\"status\":\"error\",\"message\":\"no ProximitySensor registered for robot_id '{robotId}'\"}}";
+
+            float[] p = sensor.GetCachedPose();
             if (p == null || p.Length < 4)
                 return "{\"status\":\"error\",\"message\":\"no pose available yet\"}";
 
@@ -308,6 +341,59 @@ namespace RobotSimulator.Communication
             return sb.ToString();
         }
 
+        // ── Arm state query ──────────────────────────────────────────────────
+        //
+        // Joint angles, gripper amount, and IsHolding — all self-knowledge a
+        // real TTLServo-driven arm has via its own commanded/servo-feedback
+        // state, unlike chassis pose above. Lets Python confirm a grab
+        // actually attached a block rather than assuming it did.
+
+        private string HandleGetArmState(string armRobotId)
+        {
+            RoboticArmNetworkController net = RoboticArmNetworkController.Get(armRobotId);
+            if (net == null || net.ArmController == null)
+                return $"{{\"status\":\"error\",\"message\":\"no arm registered for robot_id '{armRobotId}'\"}}";
+
+            // Read only the cached snapshot below -- never a live Transform.
+            // GetEndEffectorPosition()/GripperOpenAmount etc. touch Unity
+            // Component/Transform APIs, which throw when called from this
+            // background thread (this was a real bug here, not theoretical:
+            // "get_position can only be called from the main thread").
+            RoboticArmController.ArmStateSnapshot state = net.ArmController.GetCachedState();
+            if (state == null)
+                return "{\"status\":\"error\",\"message\":\"arm state not ready yet\"}";
+
+            var ic = System.Globalization.CultureInfo.InvariantCulture;
+
+            var sb = new System.Text.StringBuilder();
+            sb.Append("{\"status\":\"ok\",\"joint_angles\":[");
+            for (int i = 0; i < state.JointAngles.Length; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append(state.JointAngles[i].ToString("F2", ic));
+            }
+            sb.Append("],\"gripper_amount\":");
+            sb.Append(state.GripperAmount.ToString("F2", ic));
+            sb.Append(",\"is_holding\":");
+            sb.Append(state.IsHoldingSnapshot ? "true" : "false");
+            sb.Append(",\"held_object\":");
+            sb.Append(state.IsHoldingSnapshot ? $"\"{EscapeJson(state.HeldObjectNameSnapshot)}\"" : "null");
+            sb.Append(",\"end_effector\":{\"x\":");
+            sb.Append(state.EndEffectorPosition.x.ToString("F4", ic));
+            sb.Append(",\"y\":");
+            sb.Append(state.EndEffectorPosition.y.ToString("F4", ic));
+            sb.Append(",\"z\":");
+            sb.Append(state.EndEffectorPosition.z.ToString("F4", ic));
+            sb.Append("},\"gripper_position\":{\"x\":");
+            sb.Append(state.GripperPosition.x.ToString("F4", ic));
+            sb.Append(",\"y\":");
+            sb.Append(state.GripperPosition.y.ToString("F4", ic));
+            sb.Append(",\"z\":");
+            sb.Append(state.GripperPosition.z.ToString("F4", ic));
+            sb.Append("}}");
+            return sb.ToString();
+        }
+
         // ── Lifecycle ─────────────────────────────────────────────────────────
 
         private void OnDestroy()       => StopServer();
@@ -320,6 +406,6 @@ namespace RobotSimulator.Communication
         }
 
         [System.Serializable]
-        private class QueryData { public string command; }
+        private class QueryData { public string command; public string robot_id; public string block_id; }
     }
 }

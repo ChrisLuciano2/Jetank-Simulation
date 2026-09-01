@@ -28,6 +28,7 @@ import time
 import numpy as np
 import cv2
 import sim_client
+import sim_robot_id
 
 
 # ─── CUDA image wrapper ──────────────────────────────────────────────────────
@@ -89,7 +90,7 @@ class _VideoSource:
         if not self._open:
             return None
 
-        resp = sim_client.send_query({"command": "get_frame"})
+        resp = sim_client.send_query({"command": "get_frame", "robot_id": sim_robot_id.TRUCK_ID})
         if not resp or resp.get("status") != "ok":
             return None
 

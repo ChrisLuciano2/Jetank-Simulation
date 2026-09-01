@@ -42,6 +42,24 @@ public class SimCamera : MonoBehaviour
     [SerializeField] private string detectionClass  = "cough_drop_container";
     [SerializeField] private float  detectionConf   = 0.92f;
 
+    [Header("Robot Identity")]
+    [Tooltip("Matches the owning robot's TruckController robotId, e.g. \"truck_01\". " +
+             "SimQueryServer routes get_frame/detect_objects to this camera by that id.")]
+    [SerializeField] private string robotId = "truck_01";
+
+    // Per-robot registry, replacing the old single global Instance. Each
+    // robot's RobotCamera registers itself under its own robotId instead of
+    // the first one to Awake() destroying every later one — that silently
+    // gave every robot the SAME camera feed, which made real per-robot
+    // sensing (and therefore treating the other robot as a visual obstacle)
+    // impossible with more than one robot in the scene.
+    private static readonly Dictionary<string, SimCamera> _byRobotId = new Dictionary<string, SimCamera>();
+
+    /// <summary>Look up the camera belonging to a specific robot_id, or null if none registered yet.</summary>
+    public static SimCamera Get(string robotId) =>
+        _byRobotId.TryGetValue(robotId ?? "", out var cam) ? cam : null;
+
+    /// <summary>Back-compat single-robot accessor: the first camera registered. Prefer Get(robotId).</summary>
     public static SimCamera Instance { get; private set; }
 
     private Camera         _cam;
@@ -64,8 +82,17 @@ public class SimCamera : MonoBehaviour
 
     private void Awake()
     {
-        if (Instance != null && Instance != this) { Destroy(this); return; }
-        Instance = this;
+        if (_byRobotId.ContainsKey(robotId))
+        {
+            Debug.LogError($"[SimCamera] Duplicate robotId '{robotId}' — this camera will not " +
+                            "be reachable by get_frame/detect_objects. Give each robot's " +
+                            "RobotCamera a unique robotId matching its TruckController.");
+        }
+        else
+        {
+            _byRobotId[robotId] = this;
+        }
+        if (Instance == null) Instance = this;   // first-registered wins, for back-compat callers
 
         _cam = GetComponent<Camera>();
         _rt  = new RenderTexture(captureWidth, captureHeight, 24, RenderTextureFormat.ARGB32);
@@ -80,6 +107,10 @@ public class SimCamera : MonoBehaviour
 
     private void OnDestroy()
     {
+        if (_byRobotId.TryGetValue(robotId, out var mine) && mine == this)
+            _byRobotId.Remove(robotId);
+        if (Instance == this) Instance = null;
+
         if (_rt  != null) { _rt.Release();  Destroy(_rt);  }
         if (_tex != null) { Destroy(_tex); }
     }

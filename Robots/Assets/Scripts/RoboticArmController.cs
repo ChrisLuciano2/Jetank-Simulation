@@ -45,11 +45,57 @@ public class RoboticArmController : MonoBehaviour
     public float jointSpeed = 90f;  // degrees per second for smooth motion
     public bool useSmoothMotion = true;
 
+    [Header("Grab Settings")]
+    [Tooltip("How close a GraspableBlock's center must be to the end effector to be picked up when the gripper closes.")]
+    [SerializeField] private float grabRadius = 0.6f;
+    [Tooltip("Gripper openAmount at or below this counts as \"closed\" for grab purposes.")]
+    [SerializeField] private float closedThreshold = 0.15f;
+    [Tooltip("Gripper openAmount at or above this counts as \"open\" for release purposes.")]
+    [SerializeField] private float openThreshold = 0.85f;
+
     // Internal targets for smooth motion
     private float[] _targetAngles = new float[6];
     private float[] _currentAngles = new float[6];
     private float _targetGrip = 0.5f;
     private float _currentGrip = 0.5f;
+
+    private Transform _heldObject;
+    private bool _wasGripClosed;
+
+    // ── Thread-safe state snapshot ──────────────────────────────────────────
+    //
+    // SimQueryServer's get_arm_state runs on a background thread (see its own
+    // class docs), and Unity's Transform/Component APIs may only be touched
+    // from the main thread — GetEndEffectorPosition() etc. throw if called
+    // from there. So, same pattern as SimCamera/ProximitySensor: publish an
+    // immutable snapshot by reference once per Update() on the main thread,
+    // and have the query path read only that snapshot, never a live Transform.
+    public class ArmStateSnapshot
+    {
+        public readonly float[] JointAngles;
+        public readonly float GripperAmount;
+        public readonly bool IsHoldingSnapshot;
+        public readonly string HeldObjectNameSnapshot;
+        public readonly Vector3 EndEffectorPosition;
+        public readonly Vector3 GripperPosition;
+
+        public ArmStateSnapshot(float[] jointAngles, float gripperAmount, bool isHolding,
+                                 string heldObjectName, Vector3 endEffectorPosition,
+                                 Vector3 gripperPosition)
+        {
+            JointAngles = jointAngles;
+            GripperAmount = gripperAmount;
+            IsHoldingSnapshot = isHolding;
+            HeldObjectNameSnapshot = heldObjectName;
+            EndEffectorPosition = endEffectorPosition;
+            GripperPosition = gripperPosition;
+        }
+    }
+
+    private volatile ArmStateSnapshot _cachedState;
+
+    /// <summary>Background-thread-safe snapshot of arm state, for SimQueryServer.</summary>
+    public ArmStateSnapshot GetCachedState() => _cachedState;
 
     // Gripper geometry
     private float _gripMaxOffset = 0.022f;
@@ -95,6 +141,93 @@ public class RoboticArmController : MonoBehaviour
 
         ApplyJointRotations();
         ApplyGripper();
+        UpdateGrab();
+
+        // A held block rides the end effector rigidly (parented in
+        // TryGrab), so there is nothing further to do here for its
+        // position — Unity's transform hierarchy handles that every frame
+        // on its own.
+
+        _cachedState = new ArmStateSnapshot(
+            (float[])_currentAngles.Clone(),
+            _currentGrip,
+            _heldObject != null,
+            _heldObject != null ? _heldObject.name : null,
+            GetEndEffectorPosition(),
+            GetGripperPosition());
+    }
+
+    // ─── GRAB / RELEASE ──────────────────────
+
+    /// <summary>True if the gripper currently has a block attached.</summary>
+    public bool IsHolding => _heldObject != null;
+
+    /// <summary>Name of the currently-held block, or null if none.</summary>
+    public string HeldObjectName => _heldObject != null ? _heldObject.name : null;
+
+    private void UpdateGrab()
+    {
+        bool isClosed = _currentGrip <= closedThreshold;
+        bool isOpen   = _currentGrip >= openThreshold;
+
+        if (isClosed && !_wasGripClosed && _heldObject == null)
+        {
+            TryGrab();
+        }
+        else if (isOpen && _heldObject != null)
+        {
+            Release();
+        }
+        _wasGripClosed = isClosed;
+    }
+
+    private void TryGrab()
+    {
+        // Deliberately GetGripperPosition(), not GetEndEffectorPosition(): the
+        // latter is j5_wrist, chosen to match what xyInput()'s IK model
+        // believes the tip is (see GetEndEffectorPosition()'s doc comment) --
+        // correct for keeping xyInput()-driven reach_and_grab() consistent
+        // with its own calibration, but NOT where the gripper physically is.
+        // Raw joint control (bypassing xyInput() entirely, e.g. arm_ops.py's
+        // future floor-reach workaround or diagnostic sweeps) can put the
+        // real fingers wherever it wants, ~120-290mm beyond j5_wrist -- using
+        // j5_wrist here would silently reject a real, physical grab whenever
+        // that gap matters. This is a physical proximity check, so it must
+        // use the physical point.
+        Vector3 effectorPos = GetGripperPosition();
+        Collider[] hits = Physics.OverlapSphere(effectorPos, grabRadius);
+
+        Transform closest = null;
+        float closestDist = float.MaxValue;
+        foreach (Collider c in hits)
+        {
+            GraspableBlock block = c.GetComponentInParent<GraspableBlock>();
+            if (block == null) continue;
+
+            float d = Vector3.Distance(c.transform.position, effectorPos);
+            if (d < closestDist)
+            {
+                closestDist = d;
+                closest = block.transform;
+            }
+        }
+
+        if (closest != null)
+        {
+            _heldObject = closest;
+            Transform anchor = j6_endEffector != null ? j6_endEffector : transform;
+            _heldObject.SetParent(anchor, worldPositionStays: true);
+            Debug.Log($"[RoboticArm] Grabbed '{_heldObject.name}' " +
+                      $"({closestDist:F2}m from end effector)");
+        }
+    }
+
+    private void Release()
+    {
+        if (_heldObject == null) return;
+        Debug.Log($"[RoboticArm] Released '{_heldObject.name}' at {_heldObject.position}");
+        _heldObject.SetParent(null, worldPositionStays: true);
+        _heldObject = null;
     }
 
     void ApplyJointRotations()
@@ -202,12 +335,52 @@ public class RoboticArmController : MonoBehaviour
         SetGripper(0.5f);
     }
 
-    /// <summary>Get the world position of the end effector tip.</summary>
+    /// <summary>
+    /// Get the world position of the arm's grab/reach reference point.
+    ///
+    /// This is j5_wrist, not j6_endEffector. TTLServo.xyInput()'s 2-link IK
+    /// (linkageLenA=90mm shoulder->elbow, linkageLenB=160mm elbow->forearm
+    /// pivot) treats the forearm pivot as the tip of its model -- it has no
+    /// knowledge of the further ~120mm rigid segment from there out to
+    /// j6_endEffector (wrist pitch stays at 0 throughout xyInput commands,
+    /// so that segment is real but never independently actuated). Reporting
+    /// j6_endEffector here made grab detection expect the IK to place the
+    /// tip somewhere the IK's own math can never compute, since
+    /// linkageLenA/B are real hardware measurements shared with
+    /// TTLServo.py and must not be changed to paper over a sim-only
+    /// modeling gap. j5_wrist is where the IK model's own math believes
+    /// the tip is (co-located with j4_forearm -- zero offset between them),
+    /// so using it here makes GetEndEffectorPosition() consistent with what
+    /// xyInput() actually computes.
+    /// </summary>
     public Vector3 GetEndEffectorPosition()
     {
+        if (j5_wrist != null)
+            return j5_wrist.position;
         if (j6_endEffector != null)
             return j6_endEffector.position;
         return transform.position;
+    }
+
+    /// <summary>
+    /// Get the world position of the physical gripper contact point -- where
+    /// a held block's collider actually needs to be for the fingers to close
+    /// around it. This is the midpoint of gripperLeft/gripperRight (both
+    /// children of j6_endEffector, offset further out from it -- confirmed
+    /// in the scene file, e.g. gripperLeft's local position is (-0.055,
+    /// 0.17, 0) relative to j6_endEffector, which itself sits 0.12 beyond
+    /// j5_wrist). Distinct from GetEndEffectorPosition() (j5_wrist), which
+    /// exists to match what xyInput()'s IK model believes the tip is, not
+    /// where the real gripper is. Physical grab checks (TryGrab()) must use
+    /// this point, not that one.
+    /// </summary>
+    public Vector3 GetGripperPosition()
+    {
+        if (gripperLeft != null && gripperRight != null)
+            return (gripperLeft.position + gripperRight.position) * 0.5f;
+        if (j6_endEffector != null)
+            return j6_endEffector.position;
+        return GetEndEffectorPosition();
     }
 
     /// <summary>Get the world rotation of the end effector.</summary>

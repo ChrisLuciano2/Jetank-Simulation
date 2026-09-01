@@ -31,6 +31,7 @@ USAGE
 """
 
 import sim_client
+import sim_robot_id
 
 
 def get_pose():
@@ -42,7 +43,7 @@ def get_pose():
     to compare two of them rather than subtracting directly — see there
     for why.
     """
-    resp = sim_client.send_query({"command": "get_pose"})
+    resp = sim_client.send_query({"command": "get_pose", "robot_id": sim_robot_id.TRUCK_ID})
     if not resp or resp.get("status") != "ok":
         return None
     return {

@@ -9,8 +9,9 @@ Servo speeds are floats in [-1.0, 1.0], matching the real JetBot.
 """
 
 import sim_client
+import sim_robot_id
 
-ROBOT_ID = "truck_01"
+ROBOT_ID = sim_robot_id.TRUCK_ID
 
 
 class Robot:

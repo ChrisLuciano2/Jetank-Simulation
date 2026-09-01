@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using RobotSimulator.Communication;
 
@@ -13,6 +14,22 @@ public class RoboticArmNetworkController : MonoBehaviour
 
     private RoboticArmController _armController;
 
+    // Per-robot registry so SimQueryServer's get_arm_state can look up the
+    // right arm by robot_id, the same pattern as SimCamera/ProximitySensor.
+    // Exposing joint angles / gripper state / IsHolding here is NOT the
+    // same category of "cheating" as chassis ground-truth pose: a real
+    // TTLServo-driven arm already knows its own commanded joint angles
+    // (infoSingleGet reads them back from the servos), and a grip-state
+    // signal is what a current-sense or touch sensor on a real gripper
+    // would report. This is arm self-knowledge, not world ground truth.
+    private static readonly Dictionary<string, RoboticArmNetworkController> _byRobotId =
+        new Dictionary<string, RoboticArmNetworkController>();
+
+    public static RoboticArmNetworkController Get(string robotId) =>
+        _byRobotId.TryGetValue(robotId ?? "", out var arm) ? arm : null;
+
+    public RoboticArmController ArmController => _armController;
+
     private void Start()
     {
         _armController = GetComponent<RoboticArmController>();
@@ -23,6 +40,11 @@ public class RoboticArmNetworkController : MonoBehaviour
             enabled = false;
             return;
         }
+
+        if (_byRobotId.ContainsKey(robotId))
+            Debug.LogError($"[{robotId}] Duplicate arm robotId — get_arm_state won't reach this arm.");
+        else
+            _byRobotId[robotId] = this;
 
         Debug.Log($"[{robotId}] RoboticArmNetworkController started");
 
@@ -43,6 +65,8 @@ public class RoboticArmNetworkController : MonoBehaviour
         {
             TcpServer.Instance.OnMessageReceived -= HandleMessage;
         }
+        if (_byRobotId.TryGetValue(robotId, out var mine) && mine == this)
+            _byRobotId.Remove(robotId);
     }
 
     private void HandleMessage(string message)

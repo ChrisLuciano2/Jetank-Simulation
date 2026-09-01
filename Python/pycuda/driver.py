@@ -28,6 +28,7 @@ How the simulation works
 
 import numpy as np
 import sim_client
+import sim_robot_id
 import tensorrt   # import to access _streams registry and OUTPUT_SHAPE
 
 
@@ -114,7 +115,7 @@ class Stream:
         Output shape: (1, 5, 8400) where axis-1 is [x1, y1, x2, y2, conf].
         After postprocess()'s transpose: each row becomes [x1, y1, x2, y2, conf].
         """
-        resp       = sim_client.send_query({"command": "detect_objects"})
+        resp       = sim_client.send_query({"command": "detect_objects", "robot_id": sim_robot_id.TRUCK_ID})
         detections = resp.get("objects", [])
 
         # Build output tensor: shape (1, 5, 8400) filled with zeros (no detection)

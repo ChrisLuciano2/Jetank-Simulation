@@ -106,8 +106,23 @@ def sim_jetank(width: int = 640, height: int = 480) -> "CameraGeometry":
     those units. Deploying to hardware needs a real measurement of camera
     height and tilt AND a re-tune of gap_follow's distance constants — the
     geometry code is scale-free, but the tuning is not.
+
+    height_m was 0.80 -- lowered to 0.30 (RobotCamera's Unity Y position
+    changed to match) after block_sensing's blocks were corrected to a
+    realistic size: at 0.80, the nearest floor point this geometry can see
+    at all is ~0.818 sim-units away (pixel_to_ground(cx, height-1)) --
+    FARTHER than RoboticArmController.grabRadius (0.6) and
+    autonomous_tower_build.PICKUP_ARRIVAL_DISTANCE_M (0.45), a hard
+    geometric conflict: creep_to_target() cannot both get within grab
+    range AND keep the target in view, confirmed via nav_logs telemetry
+    showing a tracked block vanish from detection at exactly that
+    distance. At 0.30, the nearest visible point is ~0.307 sim-units --
+    comfortably inside both. tilt_deg and pivot_offset were left
+    unchanged (minimal change to the already-tuned geometry); if
+    obstacle-avoidance behavior needs retuning after this, that's
+    gap_follow's constants, not this function.
     """
-    return CameraGeometry(height_m=0.80, tilt_deg=20.0,
+    return CameraGeometry(height_m=0.30, tilt_deg=20.0,
                           hfov_deg=IMX219_STANDARD[0],
                           vfov_deg=IMX219_STANDARD[1],
                           width=width, height=height,

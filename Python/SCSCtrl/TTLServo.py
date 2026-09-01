@@ -23,6 +23,7 @@ Raw position ↔ angle conversion (same constants as real hardware):
 
 import numpy as np
 import sim_client
+import sim_robot_id
 
 # ─── Hardware constants (identical to real TTLServo.py) ──────────────────────
 linkageLenA   = 90
@@ -34,7 +35,7 @@ servoInit       = [None, 512, 512, 512, 512, 512]  # index 0 unused
 # Local cache of the last commanded raw position per servo (for infoSingleGet)
 _last_raw = [None, 512, 512, 512, 512, 512]
 
-ARM_ID = "arm_01"
+ARM_ID = sim_robot_id.ARM_ID
 
 # ─── Servo → joint index mapping ─────────────────────────────────────────────
 # Servo 4 (claw) is special — handled as a gripper, not a joint angle.

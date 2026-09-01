@@ -85,6 +85,7 @@ import math
 import time
 
 import sim_client
+import sim_robot_id
 from jetbot import Robot
 
 # ─── Scan geometry (must match ProximitySensor.cs defaults) ──────────────────
@@ -270,7 +271,7 @@ def get_proximity_scan() -> dict:
     query failed. Works against Unity's SimQueryServer or any physical shim
     answering the same shape.
     """
-    resp = sim_client.send_query({"command": "get_proximity_scan"})
+    resp = sim_client.send_query({"command": "get_proximity_scan", "robot_id": sim_robot_id.TRUCK_ID})
     if not resp or resp.get("status") != "ok":
         return None
     fov, count = float(resp["fov"]), int(resp["count"])

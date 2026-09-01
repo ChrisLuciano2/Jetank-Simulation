@@ -205,12 +205,39 @@ def estimate_target_distance(bearing_deg: float, scan: dict) -> float:
 
 
 def is_arrived(target_distance: float = None, blob: dict = None,
-               image_height: float = None) -> bool:
+               image_height: float = None,
+               arrival_distance: float = ARRIVAL_DISTANCE,
+               bearing_deg: float = None, max_bearing_deg: float = None) -> bool:
     """True if the target is close enough to consider the approach done,
     by whichever signal is available (ray distance preferred; blob-height
     fallback, via the raw perception.largest_blob() dict, for when the
-    target sits just off the fan's edge and no ray distance was found)."""
-    if target_distance is not None and target_distance <= ARRIVAL_DISTANCE:
+    target sits just off the fan's edge and no ray distance was found).
+
+    arrival_distance defaults to the general-purpose ARRIVAL_DISTANCE
+    (tuned for obstacle-avoidance driving), but a caller with a tighter
+    physical requirement -- e.g. getting within the arm's actual grab
+    radius, which is well inside ARRIVAL_DISTANCE -- should pass its own
+    value rather than this module's constant being changed for everyone.
+
+    bearing_deg/max_bearing_deg: optional bearing-alignment gate, on top
+    of the distance/blob-size check. A caller whose next step assumes the
+    target is roughly straight ahead -- e.g. arm_ops.reach_and_grab()'s
+    fixed base_yaw_deg=0.0, which has no way to compensate for a residual
+    bearing -- needs both close AND roughly centered before treating the
+    approach as done. Without this, a target sensed near the edge of the
+    camera's view can read "arrived" purely on distance/blob-size while
+    still tens of degrees off-center: confirmed via nav_logs telemetry
+    showing arrived=True fire on creep_to_target()'s very first tick with
+    a ~20-27 degree residual target_bearing_deg, every single retry, once
+    a camera-geometry fix let the robot get close from a wider range of
+    initial angles than before. Pass both to require |bearing_deg| <=
+    max_bearing_deg in addition to the existing distance/blob check;
+    leave either as None (the default) to skip this gate entirely, e.g.
+    for navigate_to_bearing()'s looser, non-final arrival check."""
+    if bearing_deg is not None and max_bearing_deg is not None:
+        if abs(bearing_deg) > max_bearing_deg:
+            return False
+    if target_distance is not None and target_distance <= arrival_distance:
         return True
     if blob is not None:
         if blob_height_fraction(blob, image_height) >= ARRIVAL_BLOB_FRACTION:

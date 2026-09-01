@@ -9,3 +9,13 @@ opencv-python
 
 # Both are already present on the physical Jetson Nano image, so this
 # file is only for the PC running the simulation.
+
+# Needed by robot_coord (two-robot MQTT coordination layer, not a
+# hardware shim — see Python/robot_coord/ and
+# collaborative-build-brainstorm.md). Install on the dev PC *and* on
+# both physical JetTanks: pip install "paho-mqtt<2.0"
+# Pinned below 2.0: paho-mqtt 2.x changed the Client() constructor
+# (requires a callback_api_version argument) in a way that isn't
+# backwards compatible. world_model.py targets the widely-deployed 1.x
+# API, which is what's most likely already on the Jetson images.
+paho-mqtt<2.0
