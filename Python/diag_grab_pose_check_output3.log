@@ -1,0 +1,58 @@
+[jetson_utils] videoSource opened: csi://0 (-> Unity SimQueryServer)
+[sim_client] Control channel connected -> 127.0.0.1:5555
+[sim_client] Query channel connected    -> 127.0.0.1:5556
+
+============================================================
+  [Unity SafetyMonitor] [SimCamera] RENDER GEOMETRY on 'RobotCamera'
+  RenderTexture   : 640x480 (aspect 1.3333)
+  Screen/GameView : 691x343 (aspect 2.0146)
+  camera.aspect   : 1.3333   (matches the RenderTexture)
+  fieldOfView     : 48.80 deg vertical (FOVAxisMode False physical)
+  -> horizontal   : 62.33 deg  ACTUAL
+  -> horizontal   : 62.33 deg  if aspect were the RenderTexture's
+  Python assumes  : 62.20 deg
+  ANGLE ERROR     : 0.9979x  (1.0000 = camera and model agree)
+============================================================
+
+
+============================================================
+  [Unity SafetyMonitor] [SimCamera] RENDER GEOMETRY on 'RobotCamera'
+  RenderTexture   : 640x480 (aspect 1.3333)
+  Screen/GameView : 691x343 (aspect 2.0146)
+  camera.aspect   : 1.3333   (matches the RenderTexture)
+  fieldOfView     : 48.80 deg vertical (FOVAxisMode False physical)
+  -> horizontal   : 62.33 deg  ACTUAL
+  -> horizontal   : 62.33 deg  if aspect were the RenderTexture's
+  Python assumes  : 62.20 deg
+  ANGLE ERROR     : 0.9979x  (1.0000 = camera and model agree)
+============================================================
+
+sensed: [{'bearing_deg': 1.95391589158978, 'distance_m': 0.8223039666087896, 'width_m': 0.09765895116741323, 'height_m': 0.07149427764573013, 'pixel_bbox': (305.0, 194.0, 368.0, 240.0)}, {'bearing_deg': 21.01317340236886, 'distance_m': 1.2289269309169464, 'width_m': 0.05791688440958661, 'height_m': 0.04413272338634217, 'pixel_bbox': (505.0, 171.0, 530.0, 190.0)}]
+navigate_to_bearing: True
+creep_to_target: True
+chassis pose after creep: {'status': 'ok', 'x': 0.718, 'y': 0.28, 'z': 0.9317, 'yaw_deg': 36.7716}
+
+--- BLOCK GROUND TRUTH BEFORE ANY GRAB ATTEMPT ---
+  block_A_large: {'status': 'ok', 'x': 1.5, 'y': 0.05, 'z': 2.0}
+  block_B_small: {'status': 'ok', 'x': 2.5, 'y': 0.03, 'z': 2.0}
+
+=== attempt 0: shoulder=75.0 elbow=100.0 ===
+  pre-close gripper_position: (x=1.2908, y=0.3280, z=1.6982)
+  pre-close block_A_large ground truth: (x=1.5000, y=0.0500, z=2.0000)
+  pre-close block_B_small ground truth: (x=2.5000, y=0.0300, z=2.0000)
+
+============================================================
+  [TTLServo] WARNING: servo 4 at -100.0 deg
+  Approaching hard limit [-100.0, 100.0] — warn zone [-85.0, 85.0]
+============================================================
+
+  post-close is_holding=True gripper_position: (x=1.1231, y=0.1801, z=1.4738)
+  post-close block_A_large ground truth: (x=1.4291, y=-0.0668, z=1.9051)  [moved 166.4 mm since pre-close]
+  post-close block_B_small ground truth: (x=2.5000, y=0.0300, z=2.0000)  [moved 0.0 mm since pre-close]
+  *** GRAB CONFIRMED on attempt 0 ***
+
+--- BLOCK GROUND TRUTH AFTER FULL LOOP ---
+  block_A_large: {'status': 'ok', 'x': 1.4291, 'y': -0.0668, 'z': 1.9051}
+    net displacement since before loop: 166.4 mm
+  block_B_small: {'status': 'ok', 'x': 2.5, 'y': 0.03, 'z': 2.0}
+    net displacement since before loop: 0.0 mm

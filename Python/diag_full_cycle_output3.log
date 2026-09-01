@@ -1,0 +1,7 @@
+[jetson_utils] videoSource opened: csi://0 (-> Unity SimQueryServer)
+[build] connecting as robot_a...
+[world_model] robot_a connected to 127.0.0.1:1883
+[sim_client] Control channel connected -> 127.0.0.1:5555
+[sim_client] Query channel connected    -> 127.0.0.1:5556
+[build] no blocks sensed within range even after searching -- stopping (either done, or none currently visible)
+[build] done -- 0 block(s) placed, final tower height 0.000 m

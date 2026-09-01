@@ -1,0 +1,149 @@
+[jetson_utils] videoSource opened: csi://0 (-> Unity SimQueryServer)
+[sim_client] Control channel connected -> 127.0.0.1:5555
+[sim_client] Query channel connected    -> 127.0.0.1:5556
+sensed: [{'bearing_deg': -18.62402406149738, 'distance_m': 0.6748947237444688, 'width_m': 0.05597934730526812, 'height_m': 0.043370658447167094, 'pixel_bbox': (135.0, 253.0, 179.0, 287.0)}]
+navigate_to_bearing: True
+creep_to_target: False
+chassis pose after creep: {'status': 'ok', 'x': 1.1052, 'y': 0.28, 'z': 1.0764, 'yaw_deg': 68.1183}
+yaw=0 shoulder=  65 elbow=  80 -> holding=False gripper=(x=1.931, y=0.274, z=1.408)
+yaw=0 shoulder=  65 elbow=  90 -> holding=False gripper=(x=1.868, y=0.235, z=1.383)
+yaw=0 shoulder=  65 elbow= 100 -> holding=True gripper=(x=1.799, y=0.208, z=1.355)
+yaw=0 shoulder=  65 elbow= 110 -> holding=False gripper=(x=1.728, y=0.195, z=1.326)
+
+============================================================
+  [Unity SafetyMonitor] Joint 2 APPROACHING LIMIT: 120.0° (warn zone [-115, 115], hard limit [-130, 130])
+============================================================
+
+yaw=0 shoulder=  65 elbow= 120 -> holding=True gripper=(x=1.655, y=0.195, z=1.297)
+yaw=0 shoulder=  65 elbow= 130 -> holding=True gripper=(x=1.583, y=0.208, z=1.268)
+
+============================================================
+  [Unity SafetyMonitor] Joint 2 APPROACHING LIMIT: 130.0° (warn zone [-115, 115], hard limit [-130, 130])
+============================================================
+
+yaw=0 shoulder=  70 elbow=  80 -> holding=False gripper=(x=1.903, y=0.246, z=1.397)
+yaw=0 shoulder=  70 elbow=  90 -> holding=False gripper=(x=1.837, y=0.213, z=1.370)
+yaw=0 shoulder=  70 elbow= 100 -> holding=True gripper=(x=1.766, y=0.193, z=1.342)
+yaw=0 shoulder=  70 elbow= 110 -> holding=True gripper=(x=1.694, y=0.186, z=1.313)
+yaw=0 shoulder=  70 elbow= 120 -> holding=False gripper=(x=1.621, y=0.193, z=1.284)
+
+============================================================
+  [Unity SafetyMonitor] Joint 2 APPROACHING LIMIT: 120.0° (warn zone [-115, 115], hard limit [-130, 130])
+============================================================
+
+yaw=0 shoulder=  70 elbow= 130 -> holding=False gripper=(x=1.551, y=0.213, z=1.256)
+
+============================================================
+  [Unity SafetyMonitor] Joint 2 APPROACHING LIMIT: 130.0° (warn zone [-115, 115], hard limit [-130, 130])
+============================================================
+
+yaw=0 shoulder=  75 elbow=  80 -> holding=False gripper=(x=1.873, y=0.221, z=1.385)
+yaw=0 shoulder=  75 elbow=  90 -> holding=False gripper=(x=1.804, y=0.194, z=1.357)
+yaw=0 shoulder=  75 elbow= 100 -> holding=True gripper=(x=1.733, y=0.180, z=1.328)
+yaw=0 shoulder=  75 elbow= 110 -> holding=False gripper=(x=1.660, y=0.180, z=1.299)
+yaw=0 shoulder=  75 elbow= 120 -> holding=False gripper=(x=1.588, y=0.194, z=1.270)
+
+============================================================
+  [Unity SafetyMonitor] Joint 2 APPROACHING LIMIT: 120.0° (warn zone [-115, 115], hard limit [-130, 130])
+============================================================
+
+yaw=0 shoulder=  75 elbow= 130 -> holding=True gripper=(x=1.520, y=0.221, z=1.243)
+
+============================================================
+  [Unity SafetyMonitor] Joint 2 APPROACHING LIMIT: 130.0° (warn zone [-115, 115], hard limit [-130, 130])
+============================================================
+
+
+============================================================
+  [Unity SafetyMonitor] Joint 1 APPROACHING LIMIT: 80.0° (warn zone [-10, 75], hard limit [-20, 85])
+============================================================
+
+yaw=0 shoulder=  80 elbow=  80 -> holding=False gripper=(x=1.841, y=0.198, z=1.372)
+yaw=0 shoulder=  80 elbow=  90 -> holding=False gripper=(x=1.770, y=0.177, z=1.343)
+
+============================================================
+  [Unity SafetyMonitor] Joint 1 APPROACHING LIMIT: 80.0° (warn zone [-10, 75], hard limit [-20, 85])
+============================================================
+
+yaw=0 shoulder=  80 elbow= 100 -> holding=False gripper=(x=1.698, y=0.171, z=1.314)
+
+============================================================
+  [Unity SafetyMonitor] Joint 1 APPROACHING LIMIT: 80.0° (warn zone [-10, 75], hard limit [-20, 85])
+============================================================
+
+
+============================================================
+  [Unity SafetyMonitor] Joint 1 APPROACHING LIMIT: 80.0° (warn zone [-10, 75], hard limit [-20, 85])
+============================================================
+
+yaw=0 shoulder=  80 elbow= 110 -> holding=False gripper=(x=1.625, y=0.177, z=1.285)
+yaw=0 shoulder=  80 elbow= 120 -> holding=False gripper=(x=1.555, y=0.198, z=1.257)
+
+============================================================
+  [Unity SafetyMonitor] Joint 1 APPROACHING LIMIT: 80.0° (warn zone [-10, 75], hard limit [-20, 85])
+============================================================
+
+
+============================================================
+  [Unity SafetyMonitor] Joint 2 APPROACHING LIMIT: 120.0° (warn zone [-115, 115], hard limit [-130, 130])
+============================================================
+
+yaw=0 shoulder=  80 elbow= 130 -> holding=True gripper=(x=1.489, y=0.231, z=1.230)
+
+============================================================
+  [Unity SafetyMonitor] Joint 1 APPROACHING LIMIT: 80.0° (warn zone [-10, 75], hard limit [-20, 85])
+============================================================
+
+
+============================================================
+  [Unity SafetyMonitor] Joint 2 APPROACHING LIMIT: 130.0° (warn zone [-115, 115], hard limit [-130, 130])
+============================================================
+
+
+============================================================
+  [Unity SafetyMonitor] Joint 1 APPROACHING LIMIT: 85.0° (warn zone [-10, 75], hard limit [-20, 85])
+============================================================
+
+yaw=0 shoulder=  85 elbow=  80 -> holding=False gripper=(x=1.807, y=0.178, z=1.358)
+yaw=0 shoulder=  85 elbow=  90 -> holding=False gripper=(x=1.735, y=0.165, z=1.329)
+
+============================================================
+  [Unity SafetyMonitor] Joint 1 APPROACHING LIMIT: 85.0° (warn zone [-10, 75], hard limit [-20, 85])
+============================================================
+
+
+============================================================
+  [Unity SafetyMonitor] Joint 1 APPROACHING LIMIT: 85.0° (warn zone [-10, 75], hard limit [-20, 85])
+============================================================
+
+yaw=0 shoulder=  85 elbow= 100 -> holding=False gripper=(x=1.662, y=0.165, z=1.300)
+
+============================================================
+  [Unity SafetyMonitor] Joint 1 APPROACHING LIMIT: 85.0° (warn zone [-10, 75], hard limit [-20, 85])
+============================================================
+
+yaw=0 shoulder=  85 elbow= 110 -> holding=True gripper=(x=1.591, y=0.178, z=1.271)
+yaw=0 shoulder=  85 elbow= 120 -> holding=False gripper=(x=1.522, y=0.205, z=1.244)
+
+============================================================
+  [Unity SafetyMonitor] Joint 1 APPROACHING LIMIT: 85.0° (warn zone [-10, 75], hard limit [-20, 85])
+============================================================
+
+
+============================================================
+  [Unity SafetyMonitor] Joint 2 APPROACHING LIMIT: 120.0° (warn zone [-115, 115], hard limit [-130, 130])
+============================================================
+
+
+============================================================
+  [Unity SafetyMonitor] Joint 1 APPROACHING LIMIT: 85.0° (warn zone [-10, 75], hard limit [-20, 85])
+============================================================
+
+
+============================================================
+  [Unity SafetyMonitor] Joint 2 APPROACHING LIMIT: 130.0° (warn zone [-115, 115], hard limit [-130, 130])
+============================================================
+
+yaw=0 shoulder=  85 elbow= 130 -> holding=True gripper=(x=1.459, y=0.244, z=1.219)
+
+working (shoulder, elbow) combos at yaw=0: [(65, 100), (65, 120), (65, 130), (70, 100), (70, 110), (75, 100), (75, 130), (80, 130), (85, 110), (85, 130)]

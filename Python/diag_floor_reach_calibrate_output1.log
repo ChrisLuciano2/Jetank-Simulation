@@ -1,0 +1,37 @@
+[jetson_utils] videoSource opened: csi://0 (-> Unity SimQueryServer)
+[sim_client] Control channel connected -> 127.0.0.1:5555
+[sim_client] Query channel connected    -> 127.0.0.1:5556
+
+============================================================
+  [Unity SafetyMonitor] [SimCamera] RENDER GEOMETRY on 'RobotCamera'
+  RenderTexture   : 640x480 (aspect 1.3333)
+  Screen/GameView : 691x343 (aspect 2.0146)
+  camera.aspect   : 1.3333   (matches the RenderTexture)
+  fieldOfView     : 48.80 deg vertical (FOVAxisMode False physical)
+  -> horizontal   : 62.33 deg  ACTUAL
+  -> horizontal   : 62.33 deg  if aspect were the RenderTexture's
+  Python assumes  : 62.20 deg
+  ANGLE ERROR     : 0.9979x  (1.0000 = camera and model agree)
+============================================================
+
+
+============================================================
+  [Unity SafetyMonitor] [SimCamera] RENDER GEOMETRY on 'RobotCamera'
+  RenderTexture   : 640x480 (aspect 1.3333)
+  Screen/GameView : 691x343 (aspect 2.0146)
+  camera.aspect   : 1.3333   (matches the RenderTexture)
+  fieldOfView     : 48.80 deg vertical (FOVAxisMode False physical)
+  -> horizontal   : 62.33 deg  ACTUAL
+  -> horizontal   : 62.33 deg  if aspect were the RenderTexture's
+  Python assumes  : 62.20 deg
+  ANGLE ERROR     : 0.9979x  (1.0000 = camera and model agree)
+============================================================
+
+sensed: [{'bearing_deg': -3.387979508867053, 'distance_m': 0.8232647201224211, 'width_m': 0.0962210995275743, 'height_m': 0.07157780926085289, 'pixel_bbox': (259.0, 194.0, 321.0, 240.0)}, {'bearing_deg': 16.286699653841858, 'distance_m': 1.232810410836614, 'width_m': 0.05809990510183112, 'height_m': 0.03961195530012078, 'pixel_bbox': (458.0, 169.0, 483.0, 186.0)}]
+navigate_to_bearing: True
+creep_to_target: True
+chassis pose after creep: {'status': 'ok', 'x': 0.6712, 'y': 0.28, 'z': 0.9099, 'yaw_deg': 35.9009}
+[pass1-original] yaw= -20 shoulder=  75 elbow=  90 wrist=   0 -> holding=True ee=(x=1.033, y=0.479, z=1.494) gripper=(x=1.062, y=0.208, z=1.594)
+*** GRAB SUCCEEDED: yaw=-20, shoulder=75, elbow=90, wrist=0 ***
+
+best = (-20, 75, 90, 0)

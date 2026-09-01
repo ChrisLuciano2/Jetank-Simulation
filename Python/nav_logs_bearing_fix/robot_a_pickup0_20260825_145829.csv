@@ -1,0 +1,2 @@
+t,distances,motor_l,motor_r,state,target_deg,search_side,target_bearing_deg,ray_distance_m,arrived
+0.192,12.00;5.89;1.76;1.37;1.36;0.83;0.83;12.00;1.24;1.22;12.00;12.00;12.00,0.0,0.0,FORWARD,,,-3.5,0.828,True
