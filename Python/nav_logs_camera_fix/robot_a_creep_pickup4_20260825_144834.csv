@@ -1,2 +1,0 @@
-t,distances,motor_l,motor_r,target_bearing_deg,ray_distance_m,arrived,hazard,blob_seen
-0.19,12.00;0.36;0.35;12.00;12.00;12.00;12.00;11.12;11.23;11.50;0.55;0.42;0.43,0.0,0.0,-21.1,0.356,True,True,True

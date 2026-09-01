@@ -76,3 +76,22 @@ ENV/
 /Python/validate_*.png
 *.swp
 *.swo
+
+# Ad-hoc diag_*.py run output/logs and nav telemetry dirs (the diag_*.py
+# SCRIPTS themselves are real tooling and are tracked -- only their
+# throwaway per-run output isn't).
+/Python/diag_*_output*.log
+/Python/diag_*test*.log
+/Python/diag_creep_debug*.log
+/Python/nav_logs_*/
+/Python/robot_a.log
+/Python/robot_b.log
+
+# Unity auto-recovery scratch scenes -- not real project content.
+/Robots/Assets/_Recovery/
+/Robots/Assets/_Recovery.meta
+
+# Scratch logs/screenshots from launching Unity via automation.
+/unity_open*.log
+/unity_relaunch.log
+/unity_dialog_screenshot.png

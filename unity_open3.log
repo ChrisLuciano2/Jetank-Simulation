@@ -1,7 +1,0 @@
-
-# Unity is running as administrator.
-
-Unity is running with Administrator privileges, which is not supported. Unity executes scripts and binary libraries in your project that may originate from third party sources and potentially be harmful to your computer. Unity may also execute scripts and binary libraries that are still under development and not yet fully tested. Running Unity with Administrator privileges may lead to catastrophic consequences, including but not limited to accidental data loss, change of global system settings or even bricking your device.
-
-| Restart Unity as a standard user | I wish to continue at my own risk |
-
