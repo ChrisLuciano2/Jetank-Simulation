@@ -320,7 +320,7 @@ def navigate_to_bearing(robot, controller, camera, geom, target_bearing_deg,
                     "ray_distance_m": "" if dist is None else round(dist, 3),
                     "arrived": False,
                 })
-            robot.set_motors(l, r)
+            robot.set_motors(-l, -r)
             time.sleep(interval)
         robot.stop()
         return False
