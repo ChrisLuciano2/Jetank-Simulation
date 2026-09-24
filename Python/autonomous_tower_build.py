@@ -320,7 +320,7 @@ def navigate_to_bearing(robot, controller, camera, geom, target_bearing_deg,
                     "ray_distance_m": "" if dist is None else round(dist, 3),
                     "arrived": False,
                 })
-            robot.set_motors(-l, -r)
+            robot.set_motors(l, r)
             time.sleep(interval)
         robot.stop()
         return False
@@ -734,8 +734,11 @@ def build_tower(robot, camera, geom, controller, coord: Coordinator):
         # Reactive avoidance (this call) is the hard guarantee; there is
         # no cooperative wait before picking, since two robots picking up
         # two different blocks at once is not a collision risk by itself.
+
+
         if not navigate_to_bearing(robot, controller, camera, geom, target["bearing_deg"],
-                                    log_path=_nav_log_path(coord, f"pickup{attempt}")):
+                            arrival_distance=1.8,
+                            log_path=_nav_log_path(coord, f"pickup{attempt}")):
             print("[build] could not reach the block in time -- skipping this cycle")
             continue
 
