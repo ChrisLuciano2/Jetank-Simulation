@@ -107,16 +107,29 @@ MM_PER_METRE    = 1000.0
 # directly increasing the chance at least one lands for any given actual
 # creep-arrival position. Ordered with the most-tested pair first.
 FLOOR_REACH_CANDIDATES = [
-    (75.0, 100.0),
-    (70.0, 100.0),
-    (65.0, 100.0),
-    (70.0, 110.0),
-    (65.0, 120.0),
-    (75.0, 130.0),
-    (65.0, 130.0),
-    (80.0, 130.0),
-    (85.0, 110.0),
-    (85.0, 130.0),
+    
+    # (75.0, 100.0),
+    # (70.0, 100.0),
+    # (65.0, 100.0),
+    # (70.0, 110.0),
+    # (65.0, 120.0),
+    # (75.0, 130.0),
+    # (65.0, 130.0),
+    # (80.0, 130.0),
+    # (85.0, 110.0),
+    # (85.0, 130.0),
+    
+
+     (65, 80), (65, 90),
+     (65, 100), (65, 110),
+     (65, 120), (65, 130),
+     (70, 80), (70, 90),
+     (70, 100), (70, 110),
+     (70, 130), (75, 100),
+     (75, 110), (75, 120),
+     (75, 130), (80, 120),
+     (80, 130), (85, 110),
+     (85, 120), (85, 130)
 ]
 
 # Widened from 0.6s. The gripper's own close motion (open=1.0 -> closed
@@ -178,7 +191,7 @@ def reach_and_grab(base_yaw_deg: float) -> bool:
         TTLServo.servoAngleCtrl(4, 100, 1, 200)    # re-open before the next attempt
         time.sleep(0.3)
 
-    return False
+    return False    
 
 
 def stow_for_transport():
@@ -197,16 +210,31 @@ def place_at_height(base_yaw_deg: float, stack_height_m: float) -> bool:
     Returns True once is_holding reads False (release confirmed) —
     matching reach_and_grab's "check, don't assume" convention.
     """
+
+    """ old, doesn't reach floor so can't place block at floor
     y_input = Y_AT_FLOOR_MM + stack_height_m * MM_PER_METRE
 
     TTLServo.servoAngleCtrl(1, base_yaw_deg, 1, 300)
     time.sleep(0.5)
 
-    TTLServo.xyInput(REACH_PLACE_MM, y_input)
+    TTLServo.xyInput(base_yaw_deg, REACH_PLACE_MM, y_input)
     time.sleep(MOVE_SETTLE_S)
 
     TTLServo.servoAngleCtrl(4, 100, 1, 200)    # fully open
     time.sleep(GRAB_SETTLE_S)
+    """
+    
+    TTLServo.servoAngleCtrl(1, base_yaw_deg, 1, 300)
+    time.sleep(0.5)
+
+    for shoulder_deg, elbow_deg in FLOOR_REACH_CANDIDATES:
+        TTLServo.servoAngleCtrl(2, shoulder_deg, 1, 300)
+        TTLServo.servoAngleCtrl(3, elbow_deg,    1, 300)
+        time.sleep(MOVE_SETTLE_S)
+        if _is_at_height(stack_height_m):
+            TTLServo.servoAngleCtrl(4, 100, 1, 200)   # servo 4 = gripper; 100 = fully open
+            time.sleep(GRAB_SETTLE_S)
+            break
 
     return not _is_holding()
 
@@ -226,3 +254,24 @@ def _is_holding() -> bool:
     if not resp or resp.get("status") != "ok":
         return False
     return bool(resp.get("is_holding"))
+
+
+def _is_at_height(stack_height_m) -> bool:
+    try:
+        import sim_client
+        import sim_robot_id
+    except ImportError:
+        print("[arm_ops] WARNING: no grab-confirmation sensor available on this "
+              "hardware build -- assuming the grab/release succeeded. Add a real "
+              "sensor (servo current-sense, a limit switch, etc.) before trusting "
+              "this unattended.")
+        return True
+
+    resp = sim_client.send_query({"command": "get_arm_state", "robot_id": sim_robot_id.ARM_ID})
+
+    print('resp.get("gripper_position"):', resp.get("gripper_position"))
+
+    if not resp or resp.get("status") != "ok":
+        return False
+    if resp["gripper_position"]["y"] >= stack_height_m - 1 and resp["gripper_position"]["y"] <= stack_height_m + 1:
+        return True

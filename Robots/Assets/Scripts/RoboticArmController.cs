@@ -217,6 +217,10 @@ public class RoboticArmController : MonoBehaviour
             _heldObject = closest;
             Transform anchor = j6_endEffector != null ? j6_endEffector : transform;
             _heldObject.SetParent(anchor, worldPositionStays: true);
+
+            Rigidbody rb = _heldObject.GetComponent<Rigidbody>();
+            if (rb != null) rb.isKinematic = true;   // ride along with the gripper, ignore physics while held
+
             Debug.Log($"[RoboticArm] Grabbed '{_heldObject.name}' " +
                       $"({closestDist:F2}m from end effector)");
         }
@@ -226,6 +230,10 @@ public class RoboticArmController : MonoBehaviour
     {
         if (_heldObject == null) return;
         Debug.Log($"[RoboticArm] Released '{_heldObject.name}' at {_heldObject.position}");
+
+        Rigidbody rb = _heldObject.GetComponent<Rigidbody>();
+        if (rb != null) rb.isKinematic = false;  // now let gravity take over and fall/settle
+
         _heldObject.SetParent(null, worldPositionStays: true);
         _heldObject = null;
     }

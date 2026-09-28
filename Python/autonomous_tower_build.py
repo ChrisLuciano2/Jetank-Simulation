@@ -736,9 +736,11 @@ def build_tower(robot, camera, geom, controller, coord: Coordinator):
         # two different blocks at once is not a collision risk by itself.
 
 
+        #if not navigate_to_bearing(robot, controller, camera, geom, target["bearing_deg"],
+         #                           log_path=_nav_log_path(coord, f"pickup{attempt}")):
         if not navigate_to_bearing(robot, controller, camera, geom, target["bearing_deg"],
-                            arrival_distance=1.8,
-                            log_path=_nav_log_path(coord, f"pickup{attempt}")):
+                    log_path=_nav_log_path(coord, f"pickup{attempt}")):
+
             print("[build] could not reach the block in time -- skipping this cycle")
             continue
 
