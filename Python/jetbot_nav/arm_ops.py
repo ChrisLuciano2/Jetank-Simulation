@@ -159,6 +159,9 @@ GRAB_SETTLE_S = 0.8   # time to let the gripper close and the sim grab mechanic 
 # interpolation timing when the arm hasn't actually finished moving yet.
 MOVE_SETTLE_S = 1.5
 
+STOW_SHOULDER_DEG = 0.0   # inside [-20, 85]
+STOW_ELBOW_DEG    = 0.0   # inside [-130, 130]
+
 
 def reach_and_grab(base_yaw_deg: float) -> bool:
     """
@@ -191,12 +194,21 @@ def reach_and_grab(base_yaw_deg: float) -> bool:
         TTLServo.servoAngleCtrl(4, 100, 1, 200)    # re-open before the next attempt
         time.sleep(0.3)
 
-    return False    
+    return False
+
+def idle_pose():
+    TTLServo.servoAngleCtrl(1, 0, 1, 150)
+    TTLServo.servoAngleCtrl(2, 0, 1, 150)
+    TTLServo.servoAngleCtrl(3, 0, 1, 150)
+    TTLServo.servoAngleCtrl(4, 0, 1, 150)
+    TTLServo.servoAngleCtrl(5, 0, 1, 150)
+    time.sleep(MOVE_SETTLE_S)
 
 
 def stow_for_transport():
-    """Lift the held block clear of the floor/obstacles before driving."""
-    TTLServo.xyInput(REACH_PICKUP_MM * 0.6, Y_AT_FLOOR_MM + 120.0)
+    """Raise the held block clear of the floor before driving."""
+    TTLServo.servoAngleCtrl(2, STOW_SHOULDER_DEG, 1, 300)
+    TTLServo.servoAngleCtrl(3, STOW_ELBOW_DEG,    1, 300)
     time.sleep(MOVE_SETTLE_S)
 
 
@@ -275,3 +287,4 @@ def _is_at_height(stack_height_m) -> bool:
         return False
     if resp["gripper_position"]["y"] >= stack_height_m - 1 and resp["gripper_position"]["y"] <= stack_height_m + 1:
         return True
+    return False

@@ -215,7 +215,7 @@ CREEP_ARRIVAL_MAX_BEARING_DEG = 15.0   # is_arrived()'s bearing gate for
                            # target_bearing_deg of -20 to -27 on every
                            # retry, and reach_and_grab() failed every time.
                            # 15 deg leaves comfortable margin under that.
-
+TOWER_EXCLUSION_RADIUS_M = 0.4   # tune: tower footprint + sensing error
 # Set NAV_LOG_DIR (an env var, so hardware runs stay log-free by default) to
 # have every navigate_to_bearing() approach recorded to CSV, one row per
 # tick -- same columns jetbot_nav.gap_follow's own drive_with_gap_following()
@@ -605,12 +605,26 @@ def creep_to_target(robot, camera, geom, color, arrival_distance,
             print(f"[build] creep telemetry written to {log_path}")
 
 
-def sense_and_sort_blocks(camera, geom):
+def sense_and_sort_blocks(camera, geom, filter_tower=False):
     frame = _capture_frame(camera)
     if frame is None:
         return []
-    return block_sensing.sense_blocks(frame, geom, color="red",
-                                       max_radius_m=SENSE_RADIUS_M)
+    blocks = block_sensing.sense_blocks(frame, geom, color="red",
+                                        max_radius_m=SENSE_RADIUS_M)
+    if not filter_tower or not blocks:
+        return blocks
+
+    marker_blob = perception.largest_blob(frame, BUILD_MARKER_COLOR)
+    if marker_blob is None:
+        return blocks
+
+    m_bearing = bearing_from_blob(marker_blob, geom.hfov_deg, image_width=geom.width)
+    scan = visual_scan.free_space_scan(frame, geom)
+    m_distance = estimate_target_distance(m_bearing, scan)
+    if m_distance is None:
+        m_distance = _blob_floor_distance(marker_blob, geom)
+
+    return [b for b in blocks if not _is_part_of_tower(b, m_bearing, m_distance)]
 
 
 # sense_and_sort_blocks() is a single one-shot capture on purpose -- callers
@@ -633,15 +647,30 @@ BLOCK_SEARCH_STEP_S     = 1.0   # ~35 deg per step at BLOCK_SEARCH_TURN_SPEED
 BLOCK_SEARCH_MAX_STEPS  = 12    # >360 deg of total coverage, with margin
                                  # for the rate estimate being approximate
 
+def _is_part_of_tower(block, marker_bearing, marker_distance):
+    if marker_distance is None:
+        return False   # can't tell -> don't filter (never guess from bearing)
 
-def sense_and_sort_blocks_with_search(robot, camera, geom):
+    def to_xy(bearing_deg, dist):
+        r = math.radians(bearing_deg)
+        return dist * math.sin(r), dist * math.cos(r)
+
+    bx, by = to_xy(block["bearing_deg"], block["distance_m"])
+    mx, my = to_xy(marker_bearing, marker_distance)
+    d = math.hypot(bx - mx, by - my)
+    print(f"[build] block bearing={block['bearing_deg']:.1f} "
+          f"dist={block['distance_m']:.2f} -> {d:.2f} m from marker")
+    return d <= TOWER_EXCLUSION_RADIUS_M
+
+
+def sense_and_sort_blocks_with_search(robot, camera, geom, filter_tower=False):
     """
     Like sense_and_sort_blocks(), but if nothing is sensed from the
     current heading, rotates in place in small steps and re-senses between
     each, up to a bit more than one full rotation, before giving up.
     """
     for _ in range(BLOCK_SEARCH_MAX_STEPS):
-        sensed = sense_and_sort_blocks(camera, geom)
+        sensed = sense_and_sort_blocks(camera, geom, filter_tower=filter_tower)
         if sensed:
             return sensed
         robot.set_motors(BLOCK_SEARCH_TURN_SPEED, -BLOCK_SEARCH_TURN_SPEED)
@@ -716,7 +745,8 @@ def build_tower(robot, camera, geom, controller, coord: Coordinator):
                          current_action={"tower_height_m": tower_height})
 
     for attempt in range(MAX_BLOCKS):
-        sensed = sense_and_sort_blocks_with_search(robot, camera, geom)
+        sensed = sense_and_sort_blocks_with_search(robot, camera, geom,
+                                           filter_tower=(blocks_placed > 0))
         if not sensed:
             print("[build] no blocks sensed within range even after "
                   "searching -- stopping (either done, or none currently "
@@ -816,6 +846,8 @@ def build_tower(robot, camera, geom, controller, coord: Coordinator):
         coord.publish_state("placed_clear", pose=idle_pose, blocks_placed=blocks_placed,
                              current_action={"tower_height_m": tower_height})
         print(f"[build] placed block {blocks_placed}, tower height now {tower_height:.3f} m")
+
+        arm_ops.idle_pose()
 
     coord.publish_state("idle", pose=idle_pose, blocks_placed=blocks_placed,
                          current_action={"tower_height_m": tower_height})
