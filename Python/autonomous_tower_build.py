@@ -402,7 +402,8 @@ def _blob_floor_distance(blob, geom):
 
 def creep_to_target(robot, camera, geom, color, arrival_distance,
                      expected_bearing_deg=None,
-                     timeout_s=CREEP_TIMEOUT_S, poll_hz=POLL_HZ, log_path=None):
+                     timeout_s=CREEP_TIMEOUT_S, poll_hz=POLL_HZ, log_path=None,
+                     also_exempt_color=None):
     """
     Close the final stretch to a `color`-colored target -- a block for
     pickup, the build marker for placement -- after navigate_to_bearing()
@@ -583,7 +584,21 @@ def creep_to_target(robot, camera, geom, color, arrival_distance,
             # Always exempt the bearing actually being steered at (even a
             # held one, on a rejected/blob-less tick) alongside every other
             # currently-visible same-coloured blob.
-            all_bearings = list({bearing, *[c[0] for c in candidates]})
+            extra_bearings = []
+            if also_exempt_color and bearing is not None and dist is not None:
+                marker_dist = _blob_floor_distance(blob, geom) if blob is not None else dist
+                if marker_dist is None:
+                    marker_dist = dist
+                for b in perception.detect_color_blobs(frame, also_exempt_color):
+                    b_bearing = bearing_from_blob(b, geom.hfov_deg, image_width=geom.width)
+                    b_dist = _blob_floor_distance(b, geom)
+                    if b_dist is None:
+                        continue
+                    if _is_part_of_tower({"bearing_deg": b_bearing, "distance_m": b_dist},
+                                         bearing, marker_dist):
+                        extra_bearings.append(b_bearing)
+
+            all_bearings = list({bearing, *[c[0] for c in candidates], *extra_bearings})
             hazard = _hazard_outside_window(scan, all_bearings, CREEP_TARGET_EXCLUSION_DEG)
 
             if arrived or hazard:
@@ -616,6 +631,7 @@ def sense_and_sort_blocks(camera, geom, filter_tower=False):
 
     marker_blob = perception.largest_blob(frame, BUILD_MARKER_COLOR)
     if marker_blob is None:
+        print("no marker")
         return blocks
 
     m_bearing = bearing_from_blob(marker_blob, geom.hfov_deg, image_width=geom.width)
@@ -658,8 +674,8 @@ def _is_part_of_tower(block, marker_bearing, marker_distance):
     bx, by = to_xy(block["bearing_deg"], block["distance_m"])
     mx, my = to_xy(marker_bearing, marker_distance)
     d = math.hypot(bx - mx, by - my)
-    print(f"[build] block bearing={block['bearing_deg']:.1f} "
-          f"dist={block['distance_m']:.2f} -> {d:.2f} m from marker")
+    # print(f"[build] block bearing={block['bearing_deg']:.1f} "
+          # f"dist={block['distance_m']:.2f} -> {d:.2f} m from marker")
     return d <= TOWER_EXCLUSION_RADIUS_M
 
 
@@ -821,9 +837,10 @@ def build_tower(robot, camera, geom, controller, coord: Coordinator):
         # Final stretch to actual placement range -- same reasoning as the
         # pickup creep above, targeting the marker's colour instead.
         if not creep_to_target(robot, camera, geom, color=BUILD_MARKER_COLOR,
-                                arrival_distance=PICKUP_ARRIVAL_DISTANCE_M,
-                                expected_bearing_deg=marker_bearing,
-                                log_path=_nav_log_path(coord, f"creep_place{attempt}")):
+                        arrival_distance=PICKUP_ARRIVAL_DISTANCE_M,
+                        expected_bearing_deg=marker_bearing,
+                        also_exempt_color="red",
+                        log_path=_nav_log_path(coord, f"creep_place{attempt}")):
             print("[build] could not creep to placement range -- placing at current "
                   "distance anyway")
 
