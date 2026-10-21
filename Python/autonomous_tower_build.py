@@ -84,17 +84,23 @@ import jetson_utils
 from jetbot import Robot
 from jetbot_nav import arm_ops, block_sensing, gap_follow, perception, visual_scan
 from jetbot_nav.target_seek import (
-    SeekingGapFollowController, bearing_from_blob, estimate_target_distance, is_arrived,
+    SeekingGapFollowController, TargetTracker, bearing_from_blob,
+    estimate_target_distance, is_arrived,
 )
 from robot_coord import Coordinator
 
 SENSE_RADIUS_M     = 3.0     # "blocks in front of them, within X radius"
-BUILD_MARKER_COLOR = "blue"  # must not collide with block colour or robot colour
+BUILD_MARKER_COLOR = "yellow"  # must not collide with block colour or robot colour
 MAX_SLACK          = 1
 EXCLUSION_RADIUS_M = 0.6     # how close to the marker counts as "the seam"
 POLL_HZ            = 10.0
 NAV_TIMEOUT_S       = 25.0
+NAV_TRACK_MAX_JUMP_DEG = 30.0   # navigate_to_bearing(track_color=...): a blob farther than
+                                # this from where the target was last seen is a different
+                                # object, not the target having moved
 MAX_BLOCKS          = 20     # safety cap so a sensing loop bug can't run forever
+MAX_PICKUP_FAILURES = 6      # consecutive failed pickup attempts before giving up (a deterministic
+                             # failure used to retry all MAX_BLOCKS times with identical numbers)
 
 # target_seek.ARRIVAL_DISTANCE (1.2m) is tuned for general obstacle-avoidance
 # driving and is too loose for anything the arm needs to physically reach --
@@ -250,7 +256,7 @@ def _capture_frame(camera):
 
 def navigate_to_bearing(robot, controller, camera, geom, target_bearing_deg,
                          timeout_s=NAV_TIMEOUT_S, poll_hz=POLL_HZ,
-                         arrival_distance=None, log_path=None):
+                         arrival_distance=None, log_path=None, track_color=None):
     """
     Drive toward target_bearing_deg using the SAME camera-based obstacle
     scan gap_follow already trusts. This is what makes the other robot
@@ -271,10 +277,24 @@ def navigate_to_bearing(robot, controller, camera, geom, target_bearing_deg,
     target_bearing_deg/ray_distance_m/arrived -- replayable offline with
     jetbot_nav.gap_follow.replay_log(). See NAV_LOG_DIR above.
 
+    track_color, if given, re-measures the target's bearing from the camera
+    EVERY tick (largest blob of that colour) instead of steering at the one
+    bearing passed in. target_bearing_deg is relative to the robot's heading
+    at the moment it was measured, so it goes stale as soon as the robot
+    turns or moves; for a far target (the build marker) a frozen bearing
+    makes the robot arc off in an arbitrary direction. Brief detection
+    drops are bridged by target_seek.TargetTracker; if the target is lost
+    for good the last known bearing is kept. Default None keeps the old
+    fixed-bearing behaviour (used for pickups, which are close and are
+    followed by creep_to_target()).
+
     Returns True once arrived (per target_seek.is_arrived), False on
     timeout.
     """
     deadline = time.time() + timeout_s
+    tracker = TargetTracker() if track_color else None
+    current_bearing = target_bearing_deg
+    last_print = 0.0
     interval = 1.0 / poll_hz
     arrived_kwargs = {} if arrival_distance is None else {"arrival_distance": arrival_distance}
 
@@ -292,7 +312,38 @@ def navigate_to_bearing(robot, controller, camera, geom, target_bearing_deg,
                 time.sleep(interval)
                 continue
             scan = visual_scan.free_space_scan(frame, geom)
-            dist = estimate_target_distance(target_bearing_deg, scan)
+            if tracker is not None:
+                # Follow the blob CLOSEST TO WHERE THE TARGET WAS LAST SEEN,
+                # not the largest one: with several blue things around
+                # (walls, another robot) "largest" can flip between them
+                # from tick to tick.
+                blobs = perception.detect_color_blobs(frame, track_color)
+                cands = [(bearing_from_blob(b, geom.hfov_deg, image_width=geom.width), b)
+                         for b in blobs]
+                blob = seen = None
+                if cands:
+                    cb, cblob = min(cands, key=lambda c: abs(c[0] - current_bearing))
+                    if abs(cb - current_bearing) <= NAV_TRACK_MAX_JUMP_DEG:
+                        seen, blob = cb, cblob
+                held = tracker.update(seen)
+                if held is not None:
+                    current_bearing = held
+                # Floor-projection distance of the blob itself, not the scan
+                # ray at its bearing: the ray reports whatever the scan sees
+                # at that angle, which for a low floor marker can be
+                # something behind it.
+                floor_dist = _blob_floor_distance(blob, geom) if blob is not None else None
+                ray_dist = estimate_target_distance(current_bearing, scan)
+                dist = floor_dist if floor_dist is not None else ray_dist
+                if time.time() - last_print > 1.0:
+                    last_print = time.time()
+                    fmt = lambda v: "n/a" if v is None else format(v, ".2f")
+                    cand_txt = ", ".join(f"({c[0]:.0f}deg area={c[1]['area']:.0f})" for c in cands[:4])
+                    print(f"[nav] tracking {track_color}: seen={seen is not None} "
+                          f"bearing={current_bearing:.1f} floor_dist={fmt(floor_dist)} "
+                          f"ray_dist={fmt(ray_dist)} | {len(cands)} blobs: {cand_txt}")
+            else:
+                dist = estimate_target_distance(current_bearing, scan)
             arrived = is_arrived(dist, **arrived_kwargs)
             if arrived:
                 if writer:
@@ -302,13 +353,13 @@ def navigate_to_bearing(robot, controller, camera, geom, target_bearing_deg,
                         "distances": ";".join(f"{x:.2f}" for x in scan["distances"]),
                         "motor_l": 0.0, "motor_r": 0.0,
                         **dbg,
-                        "target_bearing_deg": round(target_bearing_deg, 1),
+                        "target_bearing_deg": round(current_bearing, 1),
                         "ray_distance_m": "" if dist is None else round(dist, 3),
                         "arrived": True,
                     })
                 robot.stop()
                 return True
-            l, r = controller.step(scan["distances"], target_bearing_deg)
+            l, r = controller.step(scan["distances"], current_bearing)
             if writer:
                 dbg = controller.debug()
                 writer.writerow({
@@ -316,7 +367,7 @@ def navigate_to_bearing(robot, controller, camera, geom, target_bearing_deg,
                     "distances": ";".join(f"{x:.2f}" for x in scan["distances"]),
                     "motor_l": round(l, 3), "motor_r": round(r, 3),
                     **dbg,
-                    "target_bearing_deg": round(target_bearing_deg, 1),
+                    "target_bearing_deg": round(current_bearing, 1),
                     "ray_distance_m": "" if dist is None else round(dist, 3),
                     "arrived": False,
                 })
@@ -333,8 +384,13 @@ def navigate_to_bearing(robot, controller, camera, geom, target_bearing_deg,
 
 def _hazard_outside_window(scan, exempt_bearings_deg, window_deg,
                             hazard_forward_m=CREEP_HAZARD_FORWARD_M):
+    return _hazard_ray(scan, exempt_bearings_deg, window_deg, hazard_forward_m) is not None
+
+
+def _hazard_ray(scan, exempt_bearings_deg, window_deg,
+                hazard_forward_m=CREEP_HAZARD_FORWARD_M):
     """
-    True if some ray OUTSIDE +/-window_deg of every bearing in
+    (angle_deg, distance) of the first ray, or None if there is none: some ray OUTSIDE +/-window_deg of every bearing in
     exempt_bearings_deg reads close enough to be a genuine, distinct hazard
     during creep_to_target()'s final approach -- e.g. the other robot
     crossing in. Rays inside any exempt window are excluded on purpose.
@@ -363,8 +419,34 @@ def _hazard_outside_window(scan, exempt_bearings_deg, window_deg,
         lateral = d * math.sin(rad)
         forward = d * math.cos(rad)
         if abs(lateral) <= gap_follow.CORRIDOR_HALF and 0 < forward < hazard_forward_m:
-            return True
-    return False
+            return (a, d)
+    return None
+
+
+def _dump_hazard_frame(frame, scan, hazard_ray):
+    """
+    Diagnostic: when creep_to_target() stops on a hazard, save the camera
+    frame and the "not floor" mask the scan was built from, so you can SEE
+    what the hazard ray at hazard_ray[0] degrees is hitting. Written to
+    NAV_LOG_DIR (or ./nav_logs). Never raises -- a diagnostic must not be
+    able to break a run.
+    """
+    try:
+        import cv2
+        import numpy as np
+        out_dir = NAV_LOG_DIR or "nav_logs"
+        os.makedirs(out_dir, exist_ok=True)
+        stamp = time.strftime("%H%M%S")
+        base = os.path.join(out_dir, f"hazard_{stamp}")
+        cv2.imwrite(base + "_frame.png", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        not_floor = (~visual_scan.floor_mask(frame)).astype(np.uint8) * 255
+        cv2.imwrite(base + "_notfloor.png", not_floor)
+        close = [(round(a), round(d, 2)) for a, d in zip(scan["angles_deg"], scan["distances"])
+                 if d < 1.0]
+        print(f"[creep] hazard frame saved: {base}_frame.png / _notfloor.png "
+              f"(rays under 1.0: {close})")
+    except Exception as e:
+        print(f"[creep] could not save hazard frame: {e}")
 
 
 def _creep_steer(bearing_deg):
@@ -403,7 +485,7 @@ def _blob_floor_distance(blob, geom):
 def creep_to_target(robot, camera, geom, color, arrival_distance,
                      expected_bearing_deg=None,
                      timeout_s=CREEP_TIMEOUT_S, poll_hz=POLL_HZ, log_path=None,
-                     also_exempt_color=None):
+                     also_exempt_color=None, exempt_floor_marker_color=None):
     """
     Close the final stretch to a `color`-colored target -- a block for
     pickup, the build marker for placement -- after navigate_to_bearing()
@@ -450,6 +532,15 @@ def creep_to_target(robot, camera, geom, color, arrival_distance,
     pass the bearing navigate_to_bearing() was aiming for, so creep starts
     locked onto the same block Phase 1 approached rather than picking
     fresh.
+
+    exempt_floor_marker_color: colour of a flat floor marker (the build
+    marker) whose rays must not count as hazards -- it is something to
+    drive over or next to, not an obstacle, and after a placement the robot
+    sits only ~PICKUP_ARRIVAL_DISTANCE_M from it, i.e. right at the hazard
+    distance. Applies wherever it is in view, unlike also_exempt_color
+    (which only exempts blobs near the tracked target).
+
+    Prints a [creep] line saying WHY it returned False.
 
     Returns True once arrived (per target_seek.is_arrived at
     arrival_distance), False if the target is lost from view, a real hazard
@@ -560,6 +651,9 @@ def creep_to_target(robot, camera, geom, color, arrival_distance,
                 if lost_ticks > CREEP_LOST_HOLD_TICKS:
                     _log(time.time() - start, scan["distances"], 0.0, 0.0,
                          None, None, False, False, False)
+                    print(f"[creep] stopped: target lost for {lost_ticks} ticks "
+                          f"({len(candidates)} {color} blobs, last bearing={last_bearing}, "
+                          f"last dist={last_distance})")
                     robot.stop()
                     return False
                 bearing, dist = last_bearing, last_distance   # hold
@@ -598,12 +692,29 @@ def creep_to_target(robot, camera, geom, color, arrival_distance,
                                          bearing, marker_dist):
                         extra_bearings.append(b_bearing)
 
-            all_bearings = list({bearing, *[c[0] for c in candidates], *extra_bearings})
-            hazard = _hazard_outside_window(scan, all_bearings, CREEP_TARGET_EXCLUSION_DEG)
+            marker_bearings = []
+            if exempt_floor_marker_color:
+                marker_bearings = [
+                    bearing_from_blob(b, geom.hfov_deg, image_width=geom.width)
+                    # min_area is small ON PURPOSE: after a placement the marker is
+                    # often only a clipped sliver at the frame edge (a few hundred
+                    # px), and the default 500 would miss it -- leaving its scan
+                    # rays as an unexempted "hazard" that blocks the creep forever.
+                    for b in perception.detect_color_blobs(
+                        frame, exempt_floor_marker_color, min_area=20)]
+            all_bearings = list({bearing, *[c[0] for c in candidates], *extra_bearings,
+                                 *marker_bearings})
+            hazard_ray = _hazard_ray(scan, all_bearings, CREEP_TARGET_EXCLUSION_DEG)
+            hazard = hazard_ray is not None
 
             if arrived or hazard:
                 _log(time.time() - start, scan["distances"], 0.0, 0.0,
                      bearing, dist, arrived, hazard, True)
+                if hazard and not arrived:
+                    print(f"[creep] stopped: hazard ray at {hazard_ray[0]:.0f} deg, "
+                          f"{hazard_ray[1]:.2f} m (target bearing={bearing:.1f}, "
+                          f"exempt bearings={sorted(round(x) for x in all_bearings)})")
+                    _dump_hazard_frame(frame, scan, hazard_ray)
                 robot.stop()
                 return arrived
 
@@ -612,6 +723,7 @@ def creep_to_target(robot, camera, geom, color, arrival_distance,
                  bearing, dist, False, False, True)
             robot.set_motors(l, r)
             time.sleep(interval)
+        print(f"[creep] stopped: timeout after {timeout_s:.0f}s (last dist={last_distance})")
         robot.stop()
         return False
     finally:
@@ -715,6 +827,25 @@ def find_build_marker(camera, geom):
     return bearing, distance
 
 
+def find_build_marker_with_search(robot, camera, geom):
+    """
+    Like find_build_marker(), but if the marker isn't in the current view
+    (the camera's FOV is narrow, and after a pickup the robot is facing the
+    block it just grabbed, not the marker), rotates in place in small steps
+    and re-senses between each, up to a bit more than one full rotation.
+    Mirrors sense_and_sort_blocks_with_search() for blocks.
+    """
+    for _ in range(BLOCK_SEARCH_MAX_STEPS):
+        bearing, distance = find_build_marker(camera, geom)
+        if bearing is not None:
+            return bearing, distance
+        robot.set_motors(BLOCK_SEARCH_TURN_SPEED, -BLOCK_SEARCH_TURN_SPEED)
+        time.sleep(BLOCK_SEARCH_STEP_S)
+        robot.stop()
+        time.sleep(0.2)   # let the camera settle before the next capture
+    return None, None
+
+
 def _marker_pose_proxy(distance_m):
     """
     robot_coord.Coordinator's wait_for_zone_clearance() compares two
@@ -760,6 +891,8 @@ def build_tower(robot, camera, geom, controller, coord: Coordinator):
     coord.publish_state("idle", pose=idle_pose, blocks_placed=blocks_placed,
                          current_action={"tower_height_m": tower_height})
 
+    pickup_failures = 0
+
     for attempt in range(MAX_BLOCKS):
         sensed = sense_and_sort_blocks_with_search(robot, camera, geom,
                                            filter_tower=(blocks_placed > 0))
@@ -788,6 +921,10 @@ def build_tower(robot, camera, geom, controller, coord: Coordinator):
                     log_path=_nav_log_path(coord, f"pickup{attempt}")):
 
             print("[build] could not reach the block in time -- skipping this cycle")
+            pickup_failures += 1
+            if pickup_failures >= MAX_PICKUP_FAILURES:
+                print(f"[build] {pickup_failures} pickup failures in a row -- giving up")
+                break
             continue
 
         # Final stretch down to actual grab range -- deliberately NOT more
@@ -796,14 +933,24 @@ def build_tower(robot, camera, geom, controller, coord: Coordinator):
         if not creep_to_target(robot, camera, geom, color="red",
                                 arrival_distance=PICKUP_ARRIVAL_DISTANCE_M,
                                 expected_bearing_deg=target["bearing_deg"],
+                                exempt_floor_marker_color=BUILD_MARKER_COLOR,
                                 log_path=_nav_log_path(coord, f"creep_pickup{attempt}")):
             print("[build] could not creep within grab range -- skipping this block")
+            pickup_failures += 1
+            if pickup_failures >= MAX_PICKUP_FAILURES:
+                print(f"[build] {pickup_failures} pickup failures in a row -- giving up")
+                break
             continue
 
         if not arm_ops.reach_and_grab(base_yaw_deg=0.0):
             print("[build] grab not confirmed -- skipping this block")
+            pickup_failures += 1
+            if pickup_failures >= MAX_PICKUP_FAILURES:
+                print(f"[build] {pickup_failures} pickup failures in a row -- giving up")
+                break
             continue
         arm_ops.stow_for_transport()
+        pickup_failures = 0
 
         next_count = blocks_placed + 1
         coord.publish_state("moving_to_place", pose=idle_pose, blocks_placed=blocks_placed,
@@ -815,24 +962,21 @@ def build_tower(robot, camera, geom, controller, coord: Coordinator):
             print("[build] pacing wait timed out -- other robot may be stalled; "
                   "proceeding under reactive avoidance only")
 
-        marker_bearing, marker_distance = find_build_marker(camera, geom)
+        marker_bearing, marker_distance = find_build_marker_with_search(robot, camera, geom)
         if marker_bearing is None:
-            print("[build] build marker not visible -- cannot navigate to the "
-                  "build zone this cycle, holding the block and retrying")
-            # Retry a few times before giving up on this block outright.
-            for _ in range(int(NAV_TIMEOUT_S * POLL_HZ)):
-                time.sleep(1.0 / POLL_HZ)
-                marker_bearing, marker_distance = find_build_marker(camera, geom)
-                if marker_bearing is not None:
-                    break
-            if marker_bearing is None:
-                print("[build] still no marker -- aborting this block")
-                continue
+            # Stop rather than `continue`: continuing would send the robot
+            # off toward another block while it is still holding this one.
+            print("[build] build marker not found after a full rotation -- stopping")
+            robot.stop()
+            break
 
         # Reactive avoidance (this call) is again what actually prevents a
         # collision approaching the shared build zone.
+        print(f"[build] build marker found: bearing={marker_bearing:.1f} deg "
+              f"distance={'n/a' if marker_distance is None else format(marker_distance, '.2f')} m")
         navigate_to_bearing(robot, controller, camera, geom, marker_bearing,
-                             log_path=_nav_log_path(coord, f"place{attempt}"))
+                             log_path=_nav_log_path(coord, f"place{attempt}"),
+                             track_color=BUILD_MARKER_COLOR)
 
         # Final stretch to actual placement range -- same reasoning as the
         # pickup creep above, targeting the marker's colour instead.

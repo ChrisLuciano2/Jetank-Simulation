@@ -162,6 +162,21 @@ MOVE_SETTLE_S = 1.5
 STOW_SHOULDER_DEG = 0.0   # inside [-20, 85]
 STOW_ELBOW_DEG    = 0.0   # inside [-130, 130]
 
+# PLACEMENT HEIGHT
+# ────────────────────────────────────────────────────────────────
+# place_at_height() releases at the first FLOOR_REACH_CANDIDATES pose whose
+# gripper height matches  (gripper height at the last successful grab) +
+# (height of the tower already built). Both are read from the SAME sensor
+# (get_arm_state's gripper_position.y), so this needs no floor-height
+# constant and no assumption about the scene's world origin: the grab
+# height is the "floor" reference, and a block placed on a tower of height
+# H has its fingers H higher than when it was picked off the floor.
+# (The old check accepted anything within +/-1 of the target; the tower is
+# a few cm tall, so it passed on the first candidate every time.)
+PLACE_HEIGHT_TOL_M = 0.015   # accept a candidate within this of the target height
+
+_grab_gripper_y = None       # gripper y at the last confirmed grab (set by reach_and_grab)
+
 
 def reach_and_grab(base_yaw_deg: float) -> bool:
     """
@@ -174,6 +189,7 @@ def reach_and_grab(base_yaw_deg: float) -> bool:
     module docstring's RELIABILITY section for why a single fixed pair
     isn't enough.
     """
+    global _grab_gripper_y
     TTLServo.servoAngleCtrl(1, base_yaw_deg, 1, 300)
     time.sleep(0.5)
 
@@ -189,6 +205,7 @@ def reach_and_grab(base_yaw_deg: float) -> bool:
         time.sleep(GRAB_SETTLE_S)
 
         if _is_holding():
+            _grab_gripper_y = _gripper_y()   # floor reference for place_at_height()
             return True
 
         TTLServo.servoAngleCtrl(4, 100, 1, 200)    # re-open before the next attempt
@@ -214,40 +231,76 @@ def stow_for_transport():
 
 def place_at_height(base_yaw_deg: float, stack_height_m: float) -> bool:
     """
-    Aim the base at base_yaw_deg, reach to REACH_PLACE_MM at a height
-    derived from stack_height_m (metres -- the sum of already-placed
-    blocks' sensed heights, see autonomous_tower_build.py, never
-    hardcoded), and open the gripper.
+    Aim the base at base_yaw_deg, find a FLOOR_REACH_CANDIDATES pose whose
+    gripper height matches where the next block belongs on a tower of
+    stack_height_m (metres -- the sum of already-placed blocks' sensed
+    heights, see autonomous_tower_build.py), and open the gripper.
 
-    Returns True once is_holding reads False (release confirmed) —
+    Target height = (gripper height at the last grab) + stack_height_m --
+    see PLACE HEIGHT in the module docstring. Candidates are tried in order
+    and the first within PLACE_HEIGHT_TOL_M wins. If none is, the arm goes
+    to the lowest candidate that is at or ABOVE the target (releasing a
+    little high beats pushing a block into the tower), or failing that the
+    closest one, and says so.
+
+    With no height sensor (hardware build) or no recorded grab height, it
+    falls back to the first candidate and says so -- it cannot check.
+
+    Returns True once is_holding reads False (release confirmed) --
     matching reach_and_grab's "check, don't assume" convention.
     """
-
-    """ old, doesn't reach floor so can't place block at floor
-    y_input = Y_AT_FLOOR_MM + stack_height_m * MM_PER_METRE
-
     TTLServo.servoAngleCtrl(1, base_yaw_deg, 1, 300)
     time.sleep(0.5)
 
-    TTLServo.xyInput(base_yaw_deg, REACH_PLACE_MM, y_input)
-    time.sleep(MOVE_SETTLE_S)
+    target_y = None if _grab_gripper_y is None else _grab_gripper_y + stack_height_m
+    if target_y is None:
+        print("[arm_ops] place: no grab height recorded -- cannot check placement "
+              "height, releasing at the first candidate")
 
-    TTLServo.servoAngleCtrl(4, 100, 1, 200)    # fully open
-    time.sleep(GRAB_SETTLE_S)
-    """
-    
-    TTLServo.servoAngleCtrl(1, base_yaw_deg, 1, 300)
-    time.sleep(0.5)
+    chosen = None
+    above = None     # (y - target, shoulder, elbow): lowest candidate at/above target
+    closest = None   # (|err|, shoulder, elbow)
 
     for shoulder_deg, elbow_deg in FLOOR_REACH_CANDIDATES:
         TTLServo.servoAngleCtrl(2, shoulder_deg, 1, 300)
         TTLServo.servoAngleCtrl(3, elbow_deg,    1, 300)
         time.sleep(MOVE_SETTLE_S)
-        if _is_at_height(stack_height_m):
-            TTLServo.servoAngleCtrl(4, 100, 1, 200)   # servo 4 = gripper; 100 = fully open
-            time.sleep(GRAB_SETTLE_S)
+
+        if target_y is None:
+            chosen = (shoulder_deg, elbow_deg)
+            break
+        y = _gripper_y()
+        if y is None:
+            print("[arm_ops] place: gripper height unavailable -- releasing at "
+                  "this candidate")
+            chosen = (shoulder_deg, elbow_deg)
             break
 
+        err = y - target_y
+        print(f"[arm_ops] place candidate ({shoulder_deg}, {elbow_deg}): "
+              f"gripper y={y:.3f} target={target_y:.3f} err={err:+.3f}")
+        if abs(err) <= PLACE_HEIGHT_TOL_M:
+            chosen = (shoulder_deg, elbow_deg)
+            break
+        if err >= 0 and (above is None or err < above[0]):
+            above = (err, shoulder_deg, elbow_deg)
+        if closest is None or abs(err) < closest[0]:
+            closest = (abs(err), shoulder_deg, elbow_deg)
+
+    if chosen is None:
+        pick = above or closest
+        if pick is None:
+            return not _is_holding()
+        _, shoulder_deg, elbow_deg = pick
+        print(f"[arm_ops] place: no candidate within {PLACE_HEIGHT_TOL_M} of the "
+              f"target height -- using ({shoulder_deg}, {elbow_deg}), "
+              f"{'the lowest above it' if above else 'the closest'}")
+        TTLServo.servoAngleCtrl(2, shoulder_deg, 1, 300)
+        TTLServo.servoAngleCtrl(3, elbow_deg,    1, 300)
+        time.sleep(MOVE_SETTLE_S)
+
+    TTLServo.servoAngleCtrl(4, 100, 1, 200)   # servo 4 = gripper; 100 = fully open
+    time.sleep(GRAB_SETTLE_S)
     return not _is_holding()
 
 
@@ -268,23 +321,23 @@ def _is_holding() -> bool:
     return bool(resp.get("is_holding"))
 
 
-def _is_at_height(stack_height_m) -> bool:
+def _gripper_y():
+    """
+    World-space height (y) of the gripper fingers from the sim's
+    get_arm_state, or None if unavailable (hardware build, or a failed
+    query). Same source for the grab reference and every placement
+    candidate, so only DIFFERENCES between readings are ever used.
+    """
     try:
         import sim_client
         import sim_robot_id
     except ImportError:
-        print("[arm_ops] WARNING: no grab-confirmation sensor available on this "
-              "hardware build -- assuming the grab/release succeeded. Add a real "
-              "sensor (servo current-sense, a limit switch, etc.) before trusting "
-              "this unattended.")
-        return True
+        return None
 
     resp = sim_client.send_query({"command": "get_arm_state", "robot_id": sim_robot_id.ARM_ID})
-
-    print('resp.get("gripper_position"):', resp.get("gripper_position"))
-
     if not resp or resp.get("status") != "ok":
-        return False
-    if resp["gripper_position"]["y"] >= stack_height_m - 1 and resp["gripper_position"]["y"] <= stack_height_m + 1:
-        return True
-    return False
+        return None
+    gp = resp.get("gripper_position")
+    if not gp or "y" not in gp:
+        return None
+    return float(gp["y"])
