@@ -176,6 +176,23 @@ STOW_ELBOW_DEG    = 0.0   # inside [-130, 130]
 PLACE_HEIGHT_TOL_M = 0.015   # accept a candidate within this of the target height
 
 _grab_gripper_y = None       # gripper y at the last confirmed grab (set by reach_and_grab)
+_grab_pose = None            # (shoulder, elbow) that produced that grab
+
+# Placing ON a tower needs the gripper HIGHER than any floor-reach pose, but
+# FLOOR_REACH_CANDIDATES are all floor-and-below poses: in
+# diag_full_cycle_marker.py runs the best of all 20 sat 0.044 m BELOW the
+# target for a one-block tower, so block 2 was released at floor level instead
+# of on top. place_at_height() therefore starts from the pose that made the
+# grab and adjusts the ELBOW only (shoulder fixed, so reach stays put) until
+# the gripper height matches. Measured at shoulder 65: elbow 80 -> y=-0.253,
+# 90 -> -0.422, 100 -> -0.535, i.e. about -0.017 m per degree, monotonic up
+# to ~110 deg. Smaller elbow = higher gripper.
+PLACE_SLOPE_M_PER_DEG = -0.017   # initial guess for dy/d(elbow); re-measured each step
+PLACE_ELBOW_MIN_DEG   = 20.0
+PLACE_ELBOW_MAX_DEG   = 110.0    # above this the height response stops being monotonic
+PLACE_MAX_STEP_DEG    = 15.0
+PLACE_MAX_ITERS       = 8
+PLACE_REFINE_SETTLE_S = 0.6      # small elbow moves finish well inside this
 
 
 def reach_and_grab(base_yaw_deg: float) -> bool:
@@ -189,7 +206,7 @@ def reach_and_grab(base_yaw_deg: float) -> bool:
     module docstring's RELIABILITY section for why a single fixed pair
     isn't enough.
     """
-    global _grab_gripper_y
+    global _grab_gripper_y, _grab_pose
     TTLServo.servoAngleCtrl(1, base_yaw_deg, 1, 300)
     time.sleep(0.5)
 
@@ -206,6 +223,7 @@ def reach_and_grab(base_yaw_deg: float) -> bool:
 
         if _is_holding():
             _grab_gripper_y = _gripper_y()   # floor reference for place_at_height()
+            _grab_pose = (shoulder_deg, elbow_deg)
             return True
 
         TTLServo.servoAngleCtrl(4, 100, 1, 200)    # re-open before the next attempt
@@ -231,73 +249,84 @@ def stow_for_transport():
 
 def place_at_height(base_yaw_deg: float, stack_height_m: float) -> bool:
     """
-    Aim the base at base_yaw_deg, find a FLOOR_REACH_CANDIDATES pose whose
-    gripper height matches where the next block belongs on a tower of
-    stack_height_m (metres -- the sum of already-placed blocks' sensed
-    heights, see autonomous_tower_build.py), and open the gripper.
+    Aim the base at base_yaw_deg, raise the gripper to where the next block
+    belongs on a tower of stack_height_m (metres -- sum of already-placed
+    blocks' sensed heights), and open the gripper.
 
-    Target height = (gripper height at the last grab) + stack_height_m --
-    see PLACE HEIGHT in the module docstring. Candidates are tried in order
-    and the first within PLACE_HEIGHT_TOL_M wins. If none is, the arm goes
-    to the lowest candidate that is at or ABOVE the target (releasing a
-    little high beats pushing a block into the tower), or failing that the
-    closest one, and says so.
+    Target gripper height = (height at the last grab) + stack_height_m, both
+    from get_arm_state's gripper_position.y, so no floor constant is needed.
+
+    Starts from the exact (shoulder, elbow) pose that made the grab -- same
+    reach, so the block goes down over the same spot relative to the chassis
+    -- then adjusts the elbow with a secant search until the height is within
+    PLACE_HEIGHT_TOL_M. (The old version only tried FLOOR_REACH_CANDIDATES,
+    which can never be higher than the grab pose, so any tower above zero
+    height was unreachable.) If the search ends short, it releases at the
+    best pose found and says so; it prefers ending at/above the target to
+    below it.
 
     With no height sensor (hardware build) or no recorded grab height, it
-    falls back to the first candidate and says so -- it cannot check.
+    releases at the grab pose and says it cannot check.
 
-    Returns True once is_holding reads False (release confirmed) --
-    matching reach_and_grab's "check, don't assume" convention.
+    Returns True once is_holding reads False (release confirmed).
     """
     TTLServo.servoAngleCtrl(1, base_yaw_deg, 1, 300)
     time.sleep(0.5)
 
+    shoulder_deg, elbow = _grab_pose if _grab_pose else FLOOR_REACH_CANDIDATES[0]
+    shoulder_deg, elbow = float(shoulder_deg), float(elbow)
+
+    def move(e):
+        TTLServo.servoAngleCtrl(2, shoulder_deg, 1, 300)
+        TTLServo.servoAngleCtrl(3, e, 1, 300)
+
+    move(elbow)
+    time.sleep(MOVE_SETTLE_S)
+
     target_y = None if _grab_gripper_y is None else _grab_gripper_y + stack_height_m
+    y = _gripper_y() if target_y is not None else None
     if target_y is None:
         print("[arm_ops] place: no grab height recorded -- cannot check placement "
-              "height, releasing at the first candidate")
+              "height, releasing at the grab pose")
+    elif y is None:
+        print("[arm_ops] place: gripper height unavailable -- releasing at the grab pose")
+    else:
+        slope = PLACE_SLOPE_M_PER_DEG
+        prev = None
+        best = (abs(y - target_y), elbow, y)
+        for _ in range(PLACE_MAX_ITERS):
+            err = y - target_y
+            print(f"[arm_ops] place: shoulder={shoulder_deg:.0f} elbow={elbow:.1f} "
+                  f"gripper y={y:.3f} target={target_y:.3f} err={err:+.3f}")
+            if abs(err) <= PLACE_HEIGHT_TOL_M:
+                break
+            if prev is not None and abs(elbow - prev[0]) > 1e-6 and abs(y - prev[1]) > 1e-4:
+                measured = (y - prev[1]) / (elbow - prev[0])
+                if measured < 0:            # only trust the expected sign
+                    slope = measured
+            step = max(-PLACE_MAX_STEP_DEG, min(PLACE_MAX_STEP_DEG, -err / slope))
+            new_elbow = max(PLACE_ELBOW_MIN_DEG, min(PLACE_ELBOW_MAX_DEG, elbow + step))
+            if abs(new_elbow - elbow) < 0.25:
+                break                        # pinned at a limit or converged
+            prev = (elbow, y)
+            elbow = new_elbow
+            move(elbow)
+            time.sleep(PLACE_REFINE_SETTLE_S)
+            y = _gripper_y()
+            if y is None:
+                break
+            cand = (abs(y - target_y), elbow, y)
+            if cand[0] < best[0]:
+                best = cand
 
-    chosen = None
-    above = None     # (y - target, shoulder, elbow): lowest candidate at/above target
-    closest = None   # (|err|, shoulder, elbow)
-
-    for shoulder_deg, elbow_deg in FLOOR_REACH_CANDIDATES:
-        TTLServo.servoAngleCtrl(2, shoulder_deg, 1, 300)
-        TTLServo.servoAngleCtrl(3, elbow_deg,    1, 300)
-        time.sleep(MOVE_SETTLE_S)
-
-        if target_y is None:
-            chosen = (shoulder_deg, elbow_deg)
-            break
-        y = _gripper_y()
-        if y is None:
-            print("[arm_ops] place: gripper height unavailable -- releasing at "
-                  "this candidate")
-            chosen = (shoulder_deg, elbow_deg)
-            break
-
-        err = y - target_y
-        print(f"[arm_ops] place candidate ({shoulder_deg}, {elbow_deg}): "
-              f"gripper y={y:.3f} target={target_y:.3f} err={err:+.3f}")
-        if abs(err) <= PLACE_HEIGHT_TOL_M:
-            chosen = (shoulder_deg, elbow_deg)
-            break
-        if err >= 0 and (above is None or err < above[0]):
-            above = (err, shoulder_deg, elbow_deg)
-        if closest is None or abs(err) < closest[0]:
-            closest = (abs(err), shoulder_deg, elbow_deg)
-
-    if chosen is None:
-        pick = above or closest
-        if pick is None:
-            return not _is_holding()
-        _, shoulder_deg, elbow_deg = pick
-        print(f"[arm_ops] place: no candidate within {PLACE_HEIGHT_TOL_M} of the "
-              f"target height -- using ({shoulder_deg}, {elbow_deg}), "
-              f"{'the lowest above it' if above else 'the closest'}")
-        TTLServo.servoAngleCtrl(2, shoulder_deg, 1, 300)
-        TTLServo.servoAngleCtrl(3, elbow_deg,    1, 300)
-        time.sleep(MOVE_SETTLE_S)
+        if y is None or abs(y - target_y) > best[0] + 1e-9:
+            # settle on the best pose seen (the loop may have overshot)
+            elbow, y = best[1], best[2]
+            move(elbow)
+            time.sleep(PLACE_REFINE_SETTLE_S)
+        if abs(y - target_y) > PLACE_HEIGHT_TOL_M:
+            print(f"[arm_ops] place: could not reach target height "
+                  f"(final err {y - target_y:+.3f} m) -- releasing anyway")
 
     TTLServo.servoAngleCtrl(4, 100, 1, 200)   # servo 4 = gripper; 100 = fully open
     time.sleep(GRAB_SETTLE_S)

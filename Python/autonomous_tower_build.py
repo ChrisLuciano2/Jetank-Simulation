@@ -152,6 +152,13 @@ CREEP_TARGET_EXCLUSION_DEG = 20.0  # rays within this many degrees of the
                            # large in-frame during this phase, not a distant
                            # point.
 CREEP_TIMEOUT_S           = 12.0
+TOWER_CREEP_TRIES         = 3
+TOWER_CREEP_TIMEOUT_S     = 20.0   # starts ~1 m out, not the ~0.5 m a pickup creep usually starts from
+CREEP_BLOCK_MIN_AREA      = 80     # same threshold block_sensing.sense_blocks() uses. creep used
+                           # perception's default of 500 px, which a 2 cm block does not reach
+                           # until ~0.45 m: diag_full_cycle_marker.py logged "0 red blobs" and
+                           # a burned pickup attempt at 0.95, 0.79 and 0.60 m before it finally
+                           # saw the block.
 CREEP_MAX_DISTANCE_JUMP_M = 0.2    # a tick-to-tick RANGE change bigger than
                            # this is treated as a wrong-blob pick, not real
                            # motion, and the previous bearing/distance are
@@ -221,6 +228,14 @@ CREEP_ARRIVAL_MAX_BEARING_DEG = 15.0   # is_arrived()'s bearing gate for
                            # target_bearing_deg of -20 to -27 on every
                            # retry, and reach_and_grab() failed every time.
                            # 15 deg leaves comfortable margin under that.
+CREEP_PIVOT_BEARING_DEG   = 10.0   # beyond this, turn IN PLACE instead of creeping forward.
+CREEP_PIVOT_SPEED         = 0.14   # Must be below CREEP_ARRIVAL_MAX_BEARING_DEG (15): the arrival
+                           # check refuses to stop while the target is more than 15 deg off-centre,
+                           # so an arc that closes distance faster than it fixes heading carries
+                           # the robot past the block. diag_full_cycle_marker.py: block 2 started at
+                           # -28 deg (already inside navigate_to_bearing's 1.2 m arrival, so it never
+                           # turned), crept to 0.35-0.40 m still at -18 deg, lost the blob in the
+                           # camera's near blind zone, and drove over it.
 TOWER_EXCLUSION_RADIUS_M = 0.4   # tune: tower footprint + sensing error
 # Set NAV_LOG_DIR (an env var, so hardware runs stay log-free by default) to
 # have every navigate_to_bearing() approach recorded to CSV, one row per
@@ -460,6 +475,11 @@ def _creep_steer(bearing_deg):
     toward the target while creeping" into "pivot in place, no forward
     progress." See CREEP_MIN_TURN's comment for the telemetry that caught
     this (distance stuck flat for a full 8-second creep attempt)."""
+    if abs(bearing_deg) > CREEP_PIVOT_BEARING_DEG:
+        # Off-angle: spin toward the target, no forward motion. + bearing = right,
+        # and the left wheel being faster turns right.
+        p = CREEP_PIVOT_SPEED if bearing_deg > 0 else -CREEP_PIVOT_SPEED
+        return p, -p
     t = math.radians(bearing_deg)
     s = max(-1.0, min(1.0, CREEP_TURN_GAIN * t))
     turn = max(abs(s) * CREEP_SPEED, CREEP_MIN_TURN) if abs(s) > 1e-6 else 0.0
@@ -485,7 +505,8 @@ def _blob_floor_distance(blob, geom):
 def creep_to_target(robot, camera, geom, color, arrival_distance,
                      expected_bearing_deg=None,
                      timeout_s=CREEP_TIMEOUT_S, poll_hz=POLL_HZ, log_path=None,
-                     also_exempt_color=None, exempt_floor_marker_color=None):
+                     also_exempt_color=None, exempt_floor_marker_color=None,
+                     min_area=500):
     """
     Close the final stretch to a `color`-colored target -- a block for
     pickup, the build marker for placement -- after navigate_to_bearing()
@@ -578,7 +599,7 @@ def creep_to_target(robot, camera, geom, color, arrival_distance,
             if frame is None:
                 time.sleep(interval)
                 continue
-            blobs = perception.detect_color_blobs(frame, color)
+            blobs = perception.detect_color_blobs(frame, color, min_area=min_area)
             scan = visual_scan.free_space_scan(frame, geom)
 
             candidates = [
@@ -827,6 +848,100 @@ def find_build_marker(camera, geom):
     return bearing, distance
 
 
+def find_tower(camera, geom, attempts=5):
+    """
+    Locate the tower already standing at the build zone: the sensed red
+    block whose floor position is within TOWER_EXCLUSION_RADIUS_M of the
+    build marker (the same test _is_part_of_tower() uses to keep the tower
+    out of the pickup list, inverted).
+
+    Returns (tower_bearing, tower_distance, marker_bearing, marker_distance); the tower values are for the tower's BASE -- for a stack,
+    that is the bottom block's floor contact, which is exactly the geometry
+    pickup uses (chassis PICKUP_ARRIVAL_DISTANCE_M from a block resting on
+    the floor), so creeping to this point puts the gripper over the stack.
+    Also returns the bearing/distance of the marker it matched, so callers can
+    steer to THAT marker (a scene can contain other yellow things).
+    Returns (None, None, None, None) if no marker-with-a-block-beside-it is visible.
+
+    Uses block_sensing.sense_blocks(), which already drops blobs clipped by
+    the frame edge, so a half-visible tower is not mis-projected.
+    """
+    for _ in range(attempts):
+        frame = _capture_frame(camera)
+        if frame is None:
+            time.sleep(0.1)
+            continue
+        marker_blob = perception.largest_blob(frame, BUILD_MARKER_COLOR, min_area=20)
+        if marker_blob is None:
+            time.sleep(0.1)
+            continue
+        m_bearing = bearing_from_blob(marker_blob, geom.hfov_deg, image_width=geom.width)
+        scan = visual_scan.free_space_scan(frame, geom)
+        m_distance = estimate_target_distance(m_bearing, scan)
+        if m_distance is None:
+            m_distance = _blob_floor_distance(marker_blob, geom)
+        if m_distance is None:
+            time.sleep(0.1)
+            continue
+        blocks = block_sensing.sense_blocks(frame, geom, color="red")
+        in_tower = [b for b in blocks if _is_part_of_tower(b, m_bearing, m_distance)]
+        raw_red = len(perception.detect_color_blobs(frame, "red", min_area=80))
+        print(f"[tower] marker bearing={m_bearing:.1f} dist={m_distance:.2f} | red blobs: "
+              f"{raw_red} raw, {len(blocks)} usable (rest clipped by frame edge / off-floor), "
+              f"{len(in_tower)} within {TOWER_EXCLUSION_RADIUS_M} m of marker")
+        if in_tower:
+            # nearest the marker wins if several qualify
+            def off_marker(b):
+                bx = b["distance_m"] * math.sin(math.radians(b["bearing_deg"]))
+                by = b["distance_m"] * math.cos(math.radians(b["bearing_deg"]))
+                mx = m_distance * math.sin(math.radians(m_bearing))
+                my = m_distance * math.cos(math.radians(m_bearing))
+                return math.hypot(bx - mx, by - my)
+            t = min(in_tower, key=off_marker)
+            return t["bearing_deg"], t["distance_m"], m_bearing, m_distance
+        time.sleep(0.1)
+    return None, None, None, None
+
+
+TOWER_BACKOFF_STEPS   = 4      # how many times to reverse and re-look before rotating
+TOWER_BACKOFF_SPEED   = 0.3
+TOWER_BACKOFF_S       = 0.8
+
+def find_tower_with_search(robot, camera, geom):
+    """
+    Find the tower site: a marker WITH A BLOCK BESIDE IT.
+
+    1. Look from the current spot, then REVERSE in short steps and look
+       again. The robot is often already at the marker after a pickup, and
+       the camera cannot see floor closer than ~0.36 m (tilted down 30 deg),
+       so a tower at the marker is inside the blind zone with its base
+       clipped by the bottom of the frame -- sense_blocks() correctly refuses
+       such a block. Backing up brings it fully into view, and keeps the
+       heading, so the tower stays in the field of view.
+    2. Only if that fails, rotate in place and look all the way round.
+    """
+    for step in range(TOWER_BACKOFF_STEPS + 1):
+        found = find_tower(camera, geom, attempts=2)
+        if found[0] is not None:
+            return found
+        if step < TOWER_BACKOFF_STEPS:
+            print(f"[tower] not visible -- reversing a little and looking again "
+                  f"({step + 1}/{TOWER_BACKOFF_STEPS})")
+            robot.set_motors(-TOWER_BACKOFF_SPEED, -TOWER_BACKOFF_SPEED)
+            time.sleep(TOWER_BACKOFF_S)
+            robot.stop()
+            time.sleep(0.2)
+    for _ in range(BLOCK_SEARCH_MAX_STEPS):
+        robot.set_motors(BLOCK_SEARCH_TURN_SPEED, -BLOCK_SEARCH_TURN_SPEED)
+        time.sleep(BLOCK_SEARCH_STEP_S)
+        robot.stop()
+        time.sleep(0.2)
+        found = find_tower(camera, geom, attempts=1)
+        if found[0] is not None:
+            return found
+    return None, None, None, None
+
+
 def find_build_marker_with_search(robot, camera, geom):
     """
     Like find_build_marker(), but if the marker isn't in the current view
@@ -934,6 +1049,7 @@ def build_tower(robot, camera, geom, controller, coord: Coordinator):
                                 arrival_distance=PICKUP_ARRIVAL_DISTANCE_M,
                                 expected_bearing_deg=target["bearing_deg"],
                                 exempt_floor_marker_color=BUILD_MARKER_COLOR,
+                                min_area=CREEP_BLOCK_MIN_AREA,
                                 log_path=_nav_log_path(coord, f"creep_pickup{attempt}")):
             print("[build] could not creep within grab range -- skipping this block")
             pickup_failures += 1
@@ -962,7 +1078,18 @@ def build_tower(robot, camera, geom, controller, coord: Coordinator):
             print("[build] pacing wait timed out -- other robot may be stalled; "
                   "proceeding under reactive avoidance only")
 
-        marker_bearing, marker_distance = find_build_marker_with_search(robot, camera, geom)
+        # After the first block, the build site is "a marker with a block next
+        # to it", NOT "the nearest yellow thing": diag_full_cycle_marker.py
+        # showed the plain marker search locking onto a yellow surface 0.32 m
+        # away at the pickup spot, "arriving" instantly, and dropping block 2
+        # nowhere near the tower.
+        site = (None, None, None, None)
+        if blocks_placed > 0:
+            site = find_tower_with_search(robot, camera, geom)
+        if site[0] is not None:
+            marker_bearing, marker_distance = site[2], site[3]
+        else:
+            marker_bearing, marker_distance = find_build_marker_with_search(robot, camera, geom)
         if marker_bearing is None:
             # Stop rather than `continue`: continuing would send the robot
             # off toward another block while it is still holding this one.
@@ -979,14 +1106,59 @@ def build_tower(robot, camera, geom, controller, coord: Coordinator):
                              track_color=BUILD_MARKER_COLOR)
 
         # Final stretch to actual placement range -- same reasoning as the
-        # pickup creep above, targeting the marker's colour instead.
-        if not creep_to_target(robot, camera, geom, color=BUILD_MARKER_COLOR,
-                        arrival_distance=PICKUP_ARRIVAL_DISTANCE_M,
-                        expected_bearing_deg=marker_bearing,
-                        also_exempt_color="red",
-                        log_path=_nav_log_path(coord, f"creep_place{attempt}")):
-            print("[build] could not creep to placement range -- placing at current "
-                  "distance anyway")
+        # pickup creep above.
+        #
+        # FIRST block: nothing is standing yet, so the marker IS the target.
+        # LATER blocks: the target is the block(s) already standing. Creeping
+        # to the marker again would stop the chassis at a slightly different
+        # spot each time and drop the block beside the tower, not on it.
+        # Creeping to the tower block itself reproduces the pickup geometry
+        # (chassis PICKUP_ARRIVAL_DISTANCE_M from a block on the floor, base
+        # yaw 0), which puts the gripper over the stack; place_at_height()
+        # then sets the vertical offset.
+        creep_ok = None
+        if blocks_placed > 0:
+            # navigate_to_bearing() above often does nothing here: the marker
+            # is usually already inside its 1.2 m arrival distance, so the
+            # real approach to the stack is THIS creep. It must be able to see
+            # a small block from ~1 m (min_area=CREEP_BLOCK_MIN_AREA -- the
+            # default 500 px made every tower creep fail with "0 red blobs"),
+            # and if it still fails we re-look and retry rather than release
+            # the block a metre away from the tower.
+            for try_n in range(TOWER_CREEP_TRIES):
+                tower_bearing, tower_distance, _, _ = find_tower_with_search(robot, camera, geom)
+                if tower_bearing is None:
+                    print("[build] cannot see the tower from here")
+                    creep_ok = False
+                    break
+                print(f"[build] tower found: bearing={tower_bearing:.1f} deg "
+                      f"distance={tower_distance:.2f} m -- creeping to it "
+                      f"(try {try_n + 1}/{TOWER_CREEP_TRIES})")
+                creep_ok = creep_to_target(
+                    robot, camera, geom, color="red",
+                    arrival_distance=PICKUP_ARRIVAL_DISTANCE_M,
+                    expected_bearing_deg=tower_bearing,
+                    exempt_floor_marker_color=BUILD_MARKER_COLOR,
+                    min_area=CREEP_BLOCK_MIN_AREA,
+                    timeout_s=TOWER_CREEP_TIMEOUT_S,
+                    log_path=_nav_log_path(coord, f"creep_tower{attempt}_{try_n}"))
+                if creep_ok:
+                    break
+            if not creep_ok:
+                # Releasing here would put the block somewhere that is not on
+                # the tower and then count it as placed. Keep holding it.
+                print("[build] could not get onto the tower -- NOT releasing the "
+                      "block off-tower; stopping with it still held")
+                robot.stop()
+                break
+        if creep_ok is None:
+            if not creep_to_target(robot, camera, geom, color=BUILD_MARKER_COLOR,
+                            arrival_distance=PICKUP_ARRIVAL_DISTANCE_M,
+                            expected_bearing_deg=marker_bearing,
+                            also_exempt_color="red",
+                            log_path=_nav_log_path(coord, f"creep_place{attempt}")):
+                print("[build] could not creep to placement range -- placing at current "
+                      "distance anyway")
 
         # Cooperative layer 2: don't enter the marker's exclusion radius
         # while the other robot is already in it, and don't approach to
